@@ -40,8 +40,13 @@ func main() {
 			// 	panic(err)
 			// }
 			// kv.Update(ctx, "wer", func(old *rat.Rational) *rat.Rational {
-			// 	return old.Add(0.3)
+			// 	return old.AddRat("0.3")
 			// })
+
+			_, err := kv.AddRat(ctx, "wer", "0.1")
+			if err != nil {
+				panic(err)
+			}
 
 		}()
 	}

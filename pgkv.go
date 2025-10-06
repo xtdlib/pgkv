@@ -2,23 +2,46 @@ package pgkv
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"os"
 	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/xtdlib/pgx/pgxpool"
+	"github.com/xtdlib/rat"
 )
 
-type KV[K comparable, V any] struct {
-	db        *pgx.Conn
+type DB interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+type KV[K comparable, V comparable] struct {
+	db        DB
 	tableName string
 }
 
 // New creates a new KV store with the given table name and initializes the table
-func New[K comparable, V any](db *pgx.Conn, tableName string) (*KV[K, V], error) {
+func New[K comparable, V comparable](dsn string, tableName string) (*KV[K, V], error) {
+	if dsn == "" && os.Getenv("PGKV_DSN") != "" {
+		dsn = os.Getenv("PGKV_DSN")
+	}
+
+	if dsn == "" {
+		dsn = "postgres://postgres:postgres@localhost:5432/postgres"
+	}
+
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		return nil, err
+	}
+
 	kv := &KV[K, V]{
-		db:        db,
+		db:        pool,
 		tableName: tableName,
 	}
 
@@ -29,10 +52,9 @@ func New[K comparable, V any](db *pgx.Conn, tableName string) (*KV[K, V], error)
 		)
 	`
 
-	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, time.Second*3)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
-	_, err := db.Exec(ctx, query)
+	_, err = kv.db.Exec(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -40,15 +62,15 @@ func New[K comparable, V any](db *pgx.Conn, tableName string) (*KV[K, V], error)
 	return kv, nil
 }
 
-// Set stores a key-value pair
-func (kv *KV[K, V]) Set(ctx context.Context, key K, value V) error {
+// TrySet stores a key-value pair, returning an error if it fails
+func (kv *KV[K, V]) TrySet(key K, value V) (V, error) {
 	keyStr, err := marshal(key)
 	if err != nil {
-		return err
+		return value, err
 	}
 	valueStr, err := marshal(value)
 	if err != nil {
-		return err
+		return value, err
 	}
 
 	query := `
@@ -56,12 +78,23 @@ func (kv *KV[K, V]) Set(ctx context.Context, key K, value V) error {
 		VALUES ($1, $2)
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
 	`
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
 	_, err = kv.db.Exec(ctx, query, keyStr, valueStr)
-	return err
+	return value, err
 }
 
-// Get retrieves a value by key
-func (kv *KV[K, V]) Get(ctx context.Context, key K) (V, error) {
+// Set stores a key-value pair, panics on error, returns the value
+func (kv *KV[K, V]) Set(key K, value V) V {
+	_, err := kv.TrySet(key, value)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
+// TryGet retrieves a value by key, returning an error if not found
+func (kv *KV[K, V]) TryGet(key K) (V, error) {
 	var v V
 	keyStr, err := marshal(key)
 	if err != nil {
@@ -70,6 +103,8 @@ func (kv *KV[K, V]) Get(ctx context.Context, key K) (V, error) {
 
 	var valueStr string
 	query := `SELECT value FROM ` + kv.tableName + ` WHERE key = $1`
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
 	err = kv.db.QueryRow(ctx, query, keyStr).Scan(&valueStr)
 	if err != nil {
 		return v, err
@@ -79,30 +114,128 @@ func (kv *KV[K, V]) Get(ctx context.Context, key K) (V, error) {
 	return v, err
 }
 
-// Add atomically adds delta to the numeric value at key and returns the new value
-func (kv *KV[K, V]) Add(ctx context.Context, key K, delta int64) (int64, error) {
+// Get retrieves a value by key, panics on error
+func (kv *KV[K, V]) Get(key K) V {
+	val, err := kv.TryGet(key)
+	if err != nil {
+		panic(err)
+	}
+	return val
+}
+
+// GetOr retrieves a value by key, returning defaultValue if not found
+func (kv *KV[K, V]) GetOr(key K, defaultValue V) V {
+	val, err := kv.TryGet(key)
+	if err == pgx.ErrNoRows {
+		return defaultValue
+	}
+	if err != nil {
+		panic(err)
+	}
+	return val
+}
+
+// TryHas checks if a key exists, returning an error if the check fails
+func (kv *KV[K, V]) TryHas(key K) (bool, error) {
 	keyStr, err := marshal(key)
 	if err != nil {
-		return 0, err
+		return false, err
 	}
 
-	query := `
-		INSERT INTO ` + kv.tableName + ` (key, value)
-		VALUES ($1, $2)
-		ON CONFLICT (key) DO UPDATE
-		SET value = (CAST(` + kv.tableName + `.value AS BIGINT) + $2)::TEXT
-		RETURNING CAST(value AS BIGINT)
-	`
-	var newValue int64
-	err = kv.db.QueryRow(ctx, query, keyStr, strconv.FormatInt(delta, 10)).Scan(&newValue)
-	if err != nil {
-		return 0, err
+	var exists int
+	query := `SELECT 1 FROM ` + kv.tableName + ` WHERE key = $1 LIMIT 1`
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+	err = kv.db.QueryRow(ctx, query, keyStr).Scan(&exists)
+	if err == pgx.ErrNoRows {
+		return false, nil
 	}
-	return newValue, nil
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Has checks if a key exists, panics on error
+func (kv *KV[K, V]) Has(key K) bool {
+	exists, err := kv.TryHas(key)
+	if err != nil {
+		panic(err)
+	}
+	return exists
+}
+
+// TryDelete removes a key-value pair, returning an error if deletion fails
+func (kv *KV[K, V]) TryDelete(key K) error {
+	keyStr, err := marshal(key)
+	if err != nil {
+		return err
+	}
+
+	query := `DELETE FROM ` + kv.tableName + ` WHERE key = $1`
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+	_, err = kv.db.Exec(ctx, query, keyStr)
+	return err
+}
+
+// Delete removes a key-value pair, panics on error
+func (kv *KV[K, V]) Delete(key K) {
+	if err := kv.TryDelete(key); err != nil {
+		panic(err)
+	}
+}
+
+// TryClear removes all key-value pairs, returning an error if it fails
+func (kv *KV[K, V]) TryClear() error {
+	query := `DELETE FROM ` + kv.tableName
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+	_, err := kv.db.Exec(ctx, query)
+	return err
+}
+
+// Clear removes all key-value pairs, panics on error
+func (kv *KV[K, V]) Clear() {
+	if err := kv.TryClear(); err != nil {
+		panic(err)
+	}
+}
+
+// SetNX sets a value only if the key doesn't exist, returns the current value
+func (kv *KV[K, V]) SetNX(key K, value V) V {
+	if kv.Has(key) {
+		return kv.Get(key)
+	}
+	return kv.Set(key, value)
+}
+
+// SetNZ sets a value only if it's not zero, returns the value
+func (kv *KV[K, V]) SetNZ(key K, value V) V {
+	var zero V
+	if value != zero {
+		_, err := kv.TrySet(key, value)
+		if err != nil {
+			panic(err)
+		}
+	}
+	return value
+}
+
+func (kv *KV[K, V]) AddRat(key K, delta any) (*rat.Rational, error) {
+	var ratOut *rat.Rational
+	out, err := kv.Update(key, func(v V) V {
+		ratOut = rat.Rat(v).Add(delta)
+		return any(ratOut).(V)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rat.Rat(out), nil
 }
 
 // Update atomically updates the value at key using the provided function and returns the new value
-func (kv *KV[K, V]) Update(ctx context.Context, key K, fn func(V) V) (V, error) {
+func (kv *KV[K, V]) Update(key K, fn func(V) V) (V, error) {
 	var result V
 
 	keyStr, err := marshal(key)
@@ -110,7 +243,10 @@ func (kv *KV[K, V]) Update(ctx context.Context, key K, fn func(V) V) (V, error) 
 		return result, err
 	}
 
-	tx, err := kv.db.BeginTx(ctx, pgx.TxOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+
+	tx, err := kv.db.Begin(ctx)
 	if err != nil {
 		return result, err
 	}
@@ -122,7 +258,7 @@ func (kv *KV[K, V]) Update(ctx context.Context, key K, fn func(V) V) (V, error) 
 	err = tx.QueryRow(ctx, query, keyStr).Scan(&valueStr)
 
 	var current V
-	if err == sql.ErrNoRows {
+	if err == pgx.ErrNoRows {
 		// Key doesn't exist, use zero value
 		current = result
 	} else if err != nil {
@@ -234,5 +370,94 @@ func setInt(v any, i int64) {
 		*val = uint32(i)
 	case *uint64:
 		*val = uint64(i)
+	}
+}
+
+// Keys iterates over all keys in forward order
+func (kv *KV[K, V]) Keys(yield func(K) bool) {
+	query := `SELECT key FROM ` + kv.tableName + ` ORDER BY key`
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+	rows, err := kv.db.Query(ctx, query)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var keyStr string
+		if err := rows.Scan(&keyStr); err != nil {
+			return
+		}
+
+		var k K
+		if err := unmarshal(keyStr, &k); err != nil {
+			return
+		}
+
+		if !yield(k) {
+			return
+		}
+	}
+}
+
+// KeysBackward iterates over all keys in reverse order
+func (kv *KV[K, V]) KeysBackward(yield func(K) bool) {
+	query := `SELECT key FROM ` + kv.tableName + ` ORDER BY key DESC`
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+	rows, err := kv.db.Query(ctx, query)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var keyStr string
+		if err := rows.Scan(&keyStr); err != nil {
+			return
+		}
+
+		var k K
+		if err := unmarshal(keyStr, &k); err != nil {
+			return
+		}
+
+		if !yield(k) {
+			return
+		}
+	}
+}
+
+// All iterates over all key-value pairs in forward order
+func (kv *KV[K, V]) All(yield func(K, V) bool) {
+	query := `SELECT key, value FROM ` + kv.tableName + ` ORDER BY key`
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+	rows, err := kv.db.Query(ctx, query)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var keyStr, valueStr string
+		if err := rows.Scan(&keyStr, &valueStr); err != nil {
+			return
+		}
+
+		var k K
+		if err := unmarshal(keyStr, &k); err != nil {
+			return
+		}
+
+		var v V
+		if err := unmarshal(valueStr, &v); err != nil {
+			return
+		}
+
+		if !yield(k, v) {
+			return
+		}
 	}
 }
