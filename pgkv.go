@@ -222,7 +222,15 @@ func (kv *KV[K, V]) SetNZ(key K, value V) V {
 	return value
 }
 
-func (kv *KV[K, V]) AddRat(key K, delta any) (*rat.Rational, error) {
+func (kv *KV[K, V]) AddRat(key K, delta any) *rat.Rational {
+	ratOut, err := kv.TryAddRat(key, delta)
+	if err != nil {
+		panic(err)
+	}
+	return ratOut
+}
+
+func (kv *KV[K, V]) TryAddRat(key K, delta any) (*rat.Rational, error) {
 	var ratOut *rat.Rational
 	out, err := kv.Update(key, func(v V) V {
 		ratOut = rat.Rat(v).Add(delta)
