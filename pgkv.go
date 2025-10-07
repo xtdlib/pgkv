@@ -51,7 +51,7 @@ func TryNew[K comparable, V comparable](dsn string, tableName string) (*KV[K, V]
 	var k K
 	keyType := "TEXT"
 	if _, ok := any(k).(time.Time); ok {
-		keyType = "TIMESTAMP"
+		keyType = "TIMESTAMPTZ"
 	}
 	switch any(k).(type) {
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
@@ -344,7 +344,7 @@ func marshal(v any) (string, error) {
 	case string:
 		return val, nil
 	case time.Time:
-		return val.Format("2006-01-02 15:04:05.999999"), nil
+		return val.Format(time.RFC3339Nano), nil
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		return strconv.FormatInt(toInt64(val), 10), nil
 	default:
@@ -363,7 +363,7 @@ func unmarshal(s string, v any) error {
 		*val = s
 		return nil
 	case *time.Time:
-		t, err := time.Parse("2006-01-02 15:04:05.999999", s)
+		t, err := time.Parse(time.RFC3339Nano, s)
 		if err != nil {
 			return err
 		}

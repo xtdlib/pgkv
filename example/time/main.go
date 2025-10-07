@@ -8,14 +8,19 @@ import (
 )
 
 func main() {
-	kv := pgkv.New[time.Time, int]("", "timetest")
-
+	kv := pgkv.New[string, time.Time]("", "tim2etest2")
+	kv2 := pgkv.New[time.Time, string]("", "tim2etest23")
 	kv.Clear()
+	kv2.Clear()
 
-	kv.Set(time.Now(), 3)
-	kv.Set(time.Now().Add(time.Hour), 4)
+	kv.Set("1", time.Now())
+	kv2.Set(time.Now(), "1")
 
-	for k, v := range kv.All {
-		fmt.Println("k", k, "v", v)
+	for _, v := range kv.All {
+		fmt.Println(v.Local())
+	}
+
+	for k, _ := range kv2.All {
+		fmt.Println(k.Local())
 	}
 }
