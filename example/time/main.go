@@ -8,10 +8,7 @@ import (
 )
 
 func main() {
-	kv, err := pgkv.New[time.Time, int]("", "timetest")
-	if err != nil {
-		panic(err)
-	}
+	kv := pgkv.New[time.Time, int]("", "timetest")
 
 	kv.Clear()
 

@@ -5,10 +5,7 @@ import (
 )
 
 func TestKeys(t *testing.T) {
-	kv, err := New[string, string]("", "test_keys")
-	if err != nil {
-		t.Fatalf("Failed to create KV: %v", err)
-	}
+	kv := New[string, string]("", "test_keys")
 
 	kv.Clear()
 
@@ -59,10 +56,7 @@ func TestKeys(t *testing.T) {
 }
 
 func TestKeysBackward(t *testing.T) {
-	kv, err := New[string, string]("", "test_keys_backward")
-	if err != nil {
-		t.Fatalf("Failed to create KV: %v", err)
-	}
+	kv := New[string, string]("", "test_keys_backward")
 
 	kv.Clear()
 
@@ -113,10 +107,7 @@ func TestKeysBackward(t *testing.T) {
 }
 
 func TestHas(t *testing.T) {
-	kv, err := New[string, int]("", "test_has")
-	if err != nil {
-		t.Fatalf("Failed to create KV: %v", err)
-	}
+	kv := New[string, int]("", "test_has")
 
 	kv.Clear()
 
@@ -133,10 +124,7 @@ func TestHas(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	kv, err := New[string, int]("", "test_delete")
-	if err != nil {
-		t.Fatalf("Failed to create KV: %v", err)
-	}
+	kv := New[string, int]("", "test_delete")
 
 	kv.Clear()
 
@@ -152,10 +140,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestClear(t *testing.T) {
-	kv, err := New[string, string]("", "test_clear")
-	if err != nil {
-		t.Fatalf("Failed to create KV: %v", err)
-	}
+	kv := New[string, string]("", "test_clear")
 
 	kv.Set("key1", "val1")
 	kv.Set("key2", "val2")
@@ -175,10 +160,7 @@ func TestClear(t *testing.T) {
 }
 
 func TestGetOr(t *testing.T) {
-	kv, err := New[string, int]("", "test_getor")
-	if err != nil {
-		t.Fatalf("Failed to create KV: %v", err)
-	}
+	kv := New[string, int]("", "test_getor")
 
 	kv.Clear()
 
@@ -197,10 +179,7 @@ func TestGetOr(t *testing.T) {
 }
 
 func TestSetNX(t *testing.T) {
-	kv, err := New[string, int]("", "test_setnx")
-	if err != nil {
-		t.Fatalf("Failed to create KV: %v", err)
-	}
+	kv := New[string, int]("", "test_setnx")
 
 	kv.Clear()
 
@@ -218,10 +197,7 @@ func TestSetNX(t *testing.T) {
 }
 
 func TestSetNZ(t *testing.T) {
-	kv, err := New[string, int]("", "test_setnz")
-	if err != nil {
-		t.Fatalf("Failed to create KV: %v", err)
-	}
+	kv := New[string, int]("", "test_setnz")
 
 	kv.Clear()
 
@@ -242,15 +218,12 @@ func TestSetNZ(t *testing.T) {
 }
 
 func TestTryGet(t *testing.T) {
-	kv, err := New[string, int]("", "test_tryget")
-	if err != nil {
-		t.Fatalf("Failed to create KV: %v", err)
-	}
+	kv := New[string, int]("", "test_tryget")
 
 	kv.Clear()
 
 	// Try missing key
-	_, err = kv.TryGet("missing")
+	_, err := kv.TryGet("missing")
 	if err == nil {
 		t.Fatal("Expected error for missing key")
 	}
@@ -267,10 +240,7 @@ func TestTryGet(t *testing.T) {
 }
 
 func TestTryHas(t *testing.T) {
-	kv, err := New[string, int]("", "test_tryhas")
-	if err != nil {
-		t.Fatalf("Failed to create KV: %v", err)
-	}
+	kv := New[string, int]("", "test_tryhas")
 
 	kv.Clear()
 

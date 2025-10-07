@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 
 	"github.com/xtdlib/pgkv"
@@ -9,29 +8,29 @@ import (
 )
 
 func main() {
-	kv, err := pgkv.New[string, *rat.Rational]("", "sample")
-	if err != nil {
-		panic(err)
+	kv := pgkv.New[*rat.Rational, *rat.Rational]("", "same")
+
+	key := rat.Rat(0)
+
+	kv.Clear()
+
+	kv.AddRat(key, "1/3")
+	kv.AddRat(key, "1/3")
+	if !kv.Get(key).Equal("2/3") {
+		log.Fatal("error")
 	}
 
-	key := "wrwee1wer"
+	kv.AddRat(rat.Rat(1), "1")
+	kv.AddRat(rat.Rat(2), "2")
 
-	ctx := context.Background()
-	{
-		out, err := kv.AddRat(ctx, key, "1/3")
-		_ = out
-		if err != nil {
-			panic(err)
-		}
-		log.Println("Added value:", out)
+	if !kv.Get(rat.Rat(1)).Equal("1") {
+		log.Fatal("error")
+	}
+	if !kv.Get(rat.Rat(2)).Equal("2") {
+		log.Fatal("error")
 	}
 
-	{
-		out, err := kv.AddRat(ctx, key, "1/3")
-		_ = out
-		if err != nil {
-			panic(err)
-		}
-		log.Println("Added value:", out)
+	for k, v := range kv.All {
+		log.Println(k, v)
 	}
 }

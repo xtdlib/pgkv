@@ -19,22 +19,22 @@ The library uses Go generics (K comparable, V comparable) and automatically maps
 
 - **Values (V)**: Always stored as `TEXT` (marshaled appropriately based on type)
 
-Type detection happens in `New()` at pgkv.go:48-56 where it inspects the zero value of K to determine the correct PostgreSQL column type.
+Type detection happens in `TryNew()` at pgkv.go:48-56 where it inspects the zero value of K to determine the correct PostgreSQL column type.
 
 ### Marshal/Unmarshal Logic
 
-Located in pgkv.go:310-346. The marshal/unmarshal functions handle type conversion for **values only**:
+Located in pgkv.go:341-401. The marshal/unmarshal functions handle type conversion:
 - `string`: stored as-is
-- `time.Time`: formatted as "2006-01-02 15:04:05.999999" (though typically handled directly by pgx)
+- `time.Time`: formatted as "2006-01-02 15:04:05.999999"
 - Integer types: converted to/from string representation
+- Types implementing `fmt.Stringer`: use String() method (e.g., `*rat.Rational`)
+- Types implementing `sql.Scanner`: use Scan() method for unmarshaling (supports both direct and pointer-to-pointer patterns)
 - Other types: JSON marshaled/unmarshaled
 
-**Important**: Keys with native PostgreSQL types (`time.Time`, integers) are scanned directly by pgx in iterators (Keys, KeysBackward, All), not through marshal/unmarshal. Only TEXT-based keys use marshal/unmarshal.
-
-When adding support for new key types, update:
-1. Type detection in `New()` (pgkv.go:48-56)
-2. Marshal/unmarshal functions for value handling
-3. Consider if pgx can scan the type directly (like TIMESTAMP/BIGINT)
+**Important**:
+- Keys with native PostgreSQL types (`time.Time`, integers) are scanned directly by pgx in iterators
+- Iterator functions use `newScanTarget()` helper (pgkv.go:429-448) to properly handle pointer types that need initialization before scanning
+- For pointer types (e.g., `*rat.Rational`), the library automatically creates properly initialized instances
 
 ### Connection Management
 
@@ -45,7 +45,7 @@ The library accepts either a DSN string or a pre-configured DB interface (pgx.Po
 
 ### Atomic Operations
 
-`Update()` (pgkv.go:246-302) provides transaction-based atomic updates using SELECT FOR UPDATE with row-level locking. This is used by `AddRat()` for concurrent rational number arithmetic.
+`Update()` (pgkv.go:272-328) provides transaction-based atomic updates using SELECT FOR UPDATE with row-level locking. This is used by `AddRat()` for concurrent rational number arithmetic.
 
 ## Development Commands
 
@@ -63,6 +63,6 @@ cd example/addrat && go run main.go
 ## Design Principles
 
 - Simple, short code - avoid overcomplication
-- Each method has both a `Try*` version (returns error) and a panic version
+- Each method has both a `Try*` version (returns error) and a panic version (including `TryNew`/`New`)
 - Iterator functions (Keys, KeysBackward, All) use Go 1.23+ range-over-func pattern
-- All database operations use 3-second timeouts
+- All database operations use 3-second timeouts (except iterators which use 60 seconds)

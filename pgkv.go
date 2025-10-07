@@ -2,8 +2,11 @@ package pgkv
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -345,6 +348,10 @@ func marshal(v any) (string, error) {
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		return strconv.FormatInt(toInt64(val), 10), nil
 	default:
+		// Check if the type implements fmt.Stringer for text representation
+		if stringer, ok := v.(fmt.Stringer); ok {
+			return stringer.String(), nil
+		}
 		b, err := json.Marshal(v)
 		return string(b), err
 	}
@@ -370,6 +377,26 @@ func unmarshal(s string, v any) error {
 		setInt(val, i)
 		return nil
 	default:
+		// Check if v is **T where *T implements sql.Scanner
+		rv := reflect.ValueOf(v)
+		if rv.Kind() == reflect.Ptr && !rv.IsNil() && rv.Elem().Kind() == reflect.Ptr {
+			// v is **T, create new *T instance and scan into it
+			elemType := rv.Elem().Type().Elem()
+			newElem := reflect.New(elemType)
+			if scanner, ok := newElem.Interface().(sql.Scanner); ok {
+				if err := scanner.Scan(s); err != nil {
+					return err
+				}
+				rv.Elem().Set(newElem)
+				return nil
+			}
+		}
+
+		// Check if v directly implements sql.Scanner
+		if scanner, ok := v.(sql.Scanner); ok {
+			return scanner.Scan(s)
+		}
+
 		return json.Unmarshal([]byte(s), v)
 	}
 }
@@ -425,6 +452,27 @@ func setInt(v any, i int64) {
 	}
 }
 
+// newScanTarget creates a new scan target for type T.
+// If T is a pointer type, it creates a new instance of the pointed-to type.
+func newScanTarget[T any]() (target any, getValue func() T) {
+	var zero T
+	rt := reflect.TypeOf(zero)
+
+	if rt != nil && rt.Kind() == reflect.Ptr {
+		// T is a pointer type, create new instance of the element type
+		elem := reflect.New(rt.Elem())
+		return elem.Interface(), func() T {
+			return elem.Interface().(T)
+		}
+	}
+
+	// T is not a pointer, use standard approach
+	target = new(T)
+	return target, func() T {
+		return *target.(*T)
+	}
+}
+
 // Keys iterates over all keys in forward order
 func (kv *KV[K, V]) Keys(yield func(K) bool) {
 	query := `SELECT key FROM ` + kv.tableName + ` ORDER BY key`
@@ -437,9 +485,9 @@ func (kv *KV[K, V]) Keys(yield func(K) bool) {
 	defer rows.Close()
 
 	keys, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (K, error) {
-		var k K
-		err := row.Scan(&k)
-		return k, err
+		target, getValue := newScanTarget[K]()
+		err := row.Scan(target)
+		return getValue(), err
 	})
 	if err != nil {
 		panic(err)
@@ -464,9 +512,9 @@ func (kv *KV[K, V]) KeysBackward(yield func(K) bool) {
 	defer rows.Close()
 
 	keys, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (K, error) {
-		var k K
-		err := row.Scan(&k)
-		return k, err
+		target, getValue := newScanTarget[K]()
+		err := row.Scan(target)
+		return getValue(), err
 	})
 	if err != nil {
 		panic(err)
@@ -496,18 +544,18 @@ func (kv *KV[K, V]) All(yield func(K, V) bool) {
 	}
 
 	pairs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (kvPair, error) {
-		var k K
+		keyTarget, getKey := newScanTarget[K]()
 		var valueStr string
-		if err := row.Scan(&k, &valueStr); err != nil {
+		if err := row.Scan(keyTarget, &valueStr); err != nil {
 			return kvPair{}, err
 		}
 
-		var v V
-		if err := unmarshal(valueStr, &v); err != nil {
+		valTarget, getVal := newScanTarget[V]()
+		if err := unmarshal(valueStr, valTarget); err != nil {
 			return kvPair{}, err
 		}
 
-		return kvPair{key: k, value: v}, nil
+		return kvPair{key: getKey(), value: getVal()}, nil
 	})
 	if err != nil {
 		panic(err)
