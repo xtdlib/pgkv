@@ -2,33 +2,21 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"os"
 	"sync"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/xtdlib/pgkv"
 	"github.com/xtdlib/rat"
 )
 
 func main() {
-	urlExample := "postgres://postgres:postgres@localhost:5432/postgres"
-	pool, err := pgxpool.New(context.Background(), urlExample)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Unable to connect to database: %v\n", err)
-		os.Exit(1)
-	}
-	defer pool.Close()
-
-	kv, err := pgkv.New[string, *rat.Rational](pool, "sample")
+	kv, err := pgkv.New[string, *rat.Rational]("", "sample")
 	if err != nil {
 		panic(err)
 	}
 
-	ctx := context.Background()
-	kv.Set(ctx, "wer", rat.Rat(0))
-	log.Println(kv.Get(ctx, "wer"))
+	kv.Set("wer", rat.Rat(0))
+	log.Println(kv.Get("wer"))
 
 	var wg sync.WaitGroup
 	for i := 0; i < 1001; i++ {
@@ -48,5 +36,6 @@ func main() {
 	wg.Wait()
 
 	// it should be 1000
+	ctx := context.Background()
 	log.Println(kv.Get(ctx, "wer"))
 }

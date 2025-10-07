@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	"time"
 
 	"github.com/xtdlib/pgkv"
 	"github.com/xtdlib/rat"
@@ -21,15 +20,14 @@ func main() {
 	log.Println(kv.Set("z", rat.Rat("0.1")))
 
 	for k, v := range kv.All {
-		time.Sleep(time.Second * 3)
 		if k == "y" {
 			kv.Set(k, rat.Rat("0.2"))
 		}
 		log.Println(k, v)
 	}
 
-	// for k, v := range kv.All {
-	// 	log.Println(k, v)
-	// }
+	for k, v := range kv.All {
+		log.Println(k, v)
+	}
 
 }
