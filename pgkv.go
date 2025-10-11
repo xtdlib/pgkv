@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/xtdlib/pgx/pgxpool"
@@ -119,7 +120,26 @@ func (kv *KV[K, V]) TrySet(key K, value V) (V, error) {
 		unmarshal(oldValueStr.String, &oldValue)
 	}
 
-	slog.Default().Log(context.Background(), slog.LevelDebug, "pgkv: set", "key", key, "old", fmt.Sprintf("%v", oldValue), "new", fmt.Sprintf("%v", value))
+	// Handle nil pointers before using cmp.Equal (which requires symmetric Equal methods)
+	oldValueReflect := reflect.ValueOf(oldValue)
+	valueReflect := reflect.ValueOf(value)
+	oldIsNil := oldValueReflect.Kind() == reflect.Ptr && oldValueReflect.IsNil()
+	valueIsNil := valueReflect.Kind() == reflect.Ptr && valueReflect.IsNil()
+
+	// Only use cmp.Equal if both are non-nil
+	changed := false
+	if oldIsNil || valueIsNil {
+		// If nil states differ, it's a change
+		changed = oldIsNil != valueIsNil
+	} else {
+		// Both non-nil, safe to use cmp.Equal
+		changed = !cmp.Equal(value, oldValue)
+	}
+
+	if changed {
+		slog.Default().Log(context.Background(), slog.LevelDebug, fmt.Sprintf("pgkv: %v: changed", kv.tableName), "key", key, "old", fmt.Sprintf("%v", oldValue), "new", fmt.Sprintf("%v", value))
+	}
+
 	return value, nil
 }
 
