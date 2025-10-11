@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"reflect"
 	"strconv"
@@ -103,6 +104,8 @@ func (kv *KV[K, V]) TrySet(key K, value V) (V, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 	_, err = kv.db.Exec(ctx, query, keyStr, valueStr)
+
+	slog.Default().Log(context.Background(), slog.LevelDebug, "pgkv: set", "key", key, "old", nil, "new", value)
 	return value, err
 }
 
@@ -271,7 +274,9 @@ func (kv *KV[K, V]) AddRat(key K, delta any) *rat.Rational {
 func (kv *KV[K, V]) TryAddRat(key K, delta any) (*rat.Rational, error) {
 	var ratOut *rat.Rational
 	out, err := kv.Update(key, func(v V) V {
-		ratOut = rat.Rat(v).Add(delta)
+		old := rat.Rat(v)
+		slog.Default().Log(context.Background(), slog.LevelDebug, "pgkv: add", "key", key, "prev", old, "delta", delta)
+		ratOut = old.Add(delta)
 		return any(ratOut).(V)
 	})
 	if err != nil {
