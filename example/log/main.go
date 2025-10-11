@@ -14,7 +14,10 @@ func main() {
 	key := rat.Rat(0)
 
 	kv.Clear()
+	kv.Set(key, rat.Rat(3))
+	kv.Set(key, rat.Rat(4))
 
+	kv.AddRat(key, "1/3")
 	kv.AddRat(key, "1/3")
 	kv.AddRat(key, "1/3")
 	// if !kv.Get(key).Equal("2/3") {

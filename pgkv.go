@@ -97,16 +97,30 @@ func (kv *KV[K, V]) TrySet(key K, value V) (V, error) {
 	}
 
 	query := `
+		WITH old AS (
+			SELECT value FROM ` + kv.tableName + ` WHERE key = $1
+		)
 		INSERT INTO ` + kv.tableName + ` (key, value)
 		VALUES ($1, $2)
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+		RETURNING (SELECT value FROM old) AS old_value
 	`
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
-	_, err = kv.db.Exec(ctx, query, keyStr, valueStr)
 
-	slog.Default().Log(context.Background(), slog.LevelDebug, "pgkv: set", "key", key, "old", nil, "new", value)
-	return value, err
+	var oldValueStr sql.NullString
+	err = kv.db.QueryRow(ctx, query, keyStr, valueStr).Scan(&oldValueStr)
+	if err != nil {
+		return value, err
+	}
+
+	var oldValue V
+	if oldValueStr.Valid {
+		unmarshal(oldValueStr.String, &oldValue)
+	}
+
+	slog.Default().Log(context.Background(), slog.LevelDebug, "pgkv: set", "key", key, "old", fmt.Sprintf("%v", oldValue), "new", fmt.Sprintf("%v", value))
+	return value, nil
 }
 
 // Set stores a key-value pair, panics on error, returns the value
@@ -271,12 +285,20 @@ func (kv *KV[K, V]) AddRat(key K, delta any) *rat.Rational {
 	return ratOut
 }
 
+func (kv *KV[K, V]) AddInt(key K, delta int) *rat.Rational {
+	ratOut, err := kv.TryAddRat(key, delta)
+	if err != nil {
+		panic(err)
+	}
+	return ratOut
+}
+
 func (kv *KV[K, V]) TryAddRat(key K, delta any) (*rat.Rational, error) {
 	var ratOut *rat.Rational
 	out, err := kv.Update(key, func(v V) V {
 		old := rat.Rat(v)
-		slog.Default().Log(context.Background(), slog.LevelDebug, "pgkv: add", "key", key, "prev", old, "delta", delta)
 		ratOut = old.Add(delta)
+		slog.Default().Log(context.Background(), slog.LevelDebug, "pgkv: add", "key", key, "old", old, "new", ratOut, "delta", delta)
 		return any(ratOut).(V)
 	})
 	if err != nil {
