@@ -13,25 +13,17 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/xtdlib/pgx/pgxpool"
 	"github.com/xtdlib/rat"
 )
 
-type DB interface {
-	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	Begin(ctx context.Context) (pgx.Tx, error)
-}
-
-type KV[K comparable, V comparable] struct {
-	db        DB
+type KV[K comparable, V any] struct {
+	db        *pgxpool.Pool
 	tableName string
 }
 
 // TryNew creates a new KV store with the given table name and initializes the table
-func TryNew[K comparable, V comparable](dsn string, tableName string) (*KV[K, V], error) {
+func TryNew[K comparable, V any](dsn string, tableName string) (*KV[K, V], error) {
 	if dsn == "" && os.Getenv("PGKV_DSN") != "" {
 		dsn = os.Getenv("PGKV_DSN")
 	}
@@ -78,7 +70,7 @@ func TryNew[K comparable, V comparable](dsn string, tableName string) (*KV[K, V]
 }
 
 // New creates a new KV store with the given table name and initializes the table, panics on error
-func New[K comparable, V comparable](dsn string, tableName string) *KV[K, V] {
+func New[K comparable, V any](dsn string, tableName string) *KV[K, V] {
 	kv, err := TryNew[K, V](dsn, tableName)
 	if err != nil {
 		panic(err)
@@ -288,7 +280,8 @@ func (kv *KV[K, V]) SetNX(key K, value V) V {
 // SetNZ sets a value only if it's not zero, returns the value
 func (kv *KV[K, V]) SetNZ(key K, value V) V {
 	var zero V
-	if value != zero {
+	// if value != zero {
+	if !cmp.Equal(value, zero) {
 		_, err := kv.TrySet(key, value)
 		if err != nil {
 			panic(err)
@@ -611,6 +604,78 @@ func (kv *KV[K, V]) All(yield func(K, V) bool) {
 	for _, pair := range pairs {
 		if !yield(pair.key, pair.value) {
 			return
+		}
+	}
+}
+
+// KeysWhere returns an iterator over keys matching the WHERE clause in forward order
+func (kv *KV[K, V]) KeysWhere(whereClause string) func(yield func(K) bool) {
+	return func(yield func(K) bool) {
+		query := `SELECT key FROM ` + kv.tableName + ` WHERE ` + whereClause + ` ORDER BY key`
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
+		defer cancel()
+		rows, err := kv.db.Query(ctx, query)
+		if err != nil {
+			panic(err)
+		}
+		defer rows.Close()
+
+		keys, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (K, error) {
+			target, getValue := newScanTarget[K]()
+			err := row.Scan(target)
+			return getValue(), err
+		})
+		if err != nil {
+			panic(err)
+		}
+
+		for _, k := range keys {
+			if !yield(k) {
+				return
+			}
+		}
+	}
+}
+
+// AllWhere returns an iterator over key-value pairs matching the WHERE clause in forward order
+func (kv *KV[K, V]) AllWhere(whereClause string) func(yield func(K, V) bool) {
+	return func(yield func(K, V) bool) {
+		query := `SELECT key, value FROM ` + kv.tableName + ` WHERE ` + whereClause + ` ORDER BY key`
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
+		defer cancel()
+		rows, err := kv.db.Query(ctx, query)
+		if err != nil {
+			panic(err)
+		}
+		defer rows.Close()
+
+		type kvPair struct {
+			key   K
+			value V
+		}
+
+		pairs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (kvPair, error) {
+			keyTarget, getKey := newScanTarget[K]()
+			var valueStr string
+			if err := row.Scan(keyTarget, &valueStr); err != nil {
+				return kvPair{}, err
+			}
+
+			valTarget, getVal := newScanTarget[V]()
+			if err := unmarshal(valueStr, valTarget); err != nil {
+				return kvPair{}, err
+			}
+
+			return kvPair{key: getKey(), value: getVal()}, nil
+		})
+		if err != nil {
+			panic(err)
+		}
+
+		for _, pair := range pairs {
+			if !yield(pair.key, pair.value) {
+				return
+			}
 		}
 	}
 }
