@@ -5,7 +5,7 @@ go 1.24.6
 require (
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/xtdlib/pgx v0.0.0-20250727062724-19e4d75c2e54
-	github.com/xtdlib/rat v0.0.0-20251007110405-8643f0f3fa15
+	github.com/xtdlib/rat v0.0.0-20251022122823-2abef9c6d5b2
 )
 
 require (

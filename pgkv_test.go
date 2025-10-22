@@ -1091,7 +1091,12 @@ func TestSetNZRat(t *testing.T) {
 
 	// SetNZ with non-zero should set
 	val := kv.SetNZ("key1", rat.Rat(100))
-	if val.Equal(100) {
+	if !val.Equal(100) {
+		t.Fatalf("Expected 100, got %v", val)
+	}
+
+	val = kv.SetNZ("key1", nil)
+	if !val.Equal(100) {
 		t.Fatalf("Expected 100, got %v", val)
 	}
 }
