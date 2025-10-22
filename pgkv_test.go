@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/xtdlib/rat"
 )
 
 func TestKeys(t *testing.T) {
@@ -636,14 +638,14 @@ func TestExoticNestedStructs(t *testing.T) {
 		Phone string
 	}
 	type Employee struct {
-		Name      string
-		Age       int
-		Address   Address
-		Contact   Contact
-		Tags      []string
-		Metadata  map[string]interface{}
-		IsActive  bool
-		Salary    *float64
+		Name     string
+		Age      int
+		Address  Address
+		Contact  Contact
+		Tags     []string
+		Metadata map[string]interface{}
+		IsActive bool
+		Salary   *float64
 	}
 
 	kv := New[string, Employee]("", "test_exotic_nested")
@@ -1080,4 +1082,16 @@ func TestExoticTableIsolation(t *testing.T) {
 	}
 
 	kv.Purge()
+}
+
+func TestSetNZRat(t *testing.T) {
+	kv := New[string, *rat.Rational]("", "test_setnz_rat")
+
+	kv.Clear()
+
+	// SetNZ with non-zero should set
+	val := kv.SetNZ("key1", rat.Rat(100))
+	if val.Equal(100) {
+		t.Fatalf("Expected 100, got %v", val)
+	}
 }
