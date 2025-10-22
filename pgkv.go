@@ -286,8 +286,10 @@ func (kv *KV[K, V]) SetNZ(key K, value V) V {
 		if err != nil {
 			panic(err)
 		}
+		return value
 	}
-	return value
+	// If value is zero, return existing value if it exists
+	return kv.GetOr(key, value)
 }
 
 func (kv *KV[K, V]) AddRat(key K, delta any) *rat.Rational {

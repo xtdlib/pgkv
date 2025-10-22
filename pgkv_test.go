@@ -1099,4 +1099,9 @@ func TestSetNZRat(t *testing.T) {
 	if !val.Equal(100) {
 		t.Fatalf("Expected 100, got %v", val)
 	}
+
+	kv.SetNX("key1", rat.Rat(200)) // no-op
+	if !kv.Get("key1").Equal(100) {
+		t.Fatalf("Expected value to remain unchanged after SetNZ with non-zero value")
+	}
 }
