@@ -189,15 +189,61 @@ func TestSetNX(t *testing.T) {
 	kv.Clear()
 
 	// First SetNX should set the value
-	val := kv.SetNX("key1", 100)
-	if val != 100 {
-		t.Fatalf("Expected 100, got %d", val)
+	wasSet := kv.SetNX("key1", 100)
+	if !wasSet {
+		t.Fatal("Expected SetNX to return true on first set")
+	}
+	if kv.Get("key1") != 100 {
+		t.Fatalf("Expected 100, got %d", kv.Get("key1"))
 	}
 
-	// Second SetNX should return existing value
-	val = kv.SetNX("key1", 200)
-	if val != 100 {
-		t.Fatalf("Expected existing value 100, got %d", val)
+	// Second SetNX should not set (key already exists)
+	wasSet = kv.SetNX("key1", 200)
+	if wasSet {
+		t.Fatal("Expected SetNX to return false when key exists")
+	}
+	if kv.Get("key1") != 100 {
+		t.Fatalf("Expected value to remain 100, got %d", kv.Get("key1"))
+	}
+}
+
+func TestSetNXConcurrent(t *testing.T) {
+	kv := New[string, int]("test_setnx_concurrent")
+	kv.Clear()
+
+	const numGoroutines = 10
+	results := make([]bool, numGoroutines)
+	done := make(chan int, numGoroutines)
+
+	// Launch multiple goroutines trying to set the same key
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			results[id] = kv.SetNX("race_key", id)
+			done <- id
+		}(i)
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < numGoroutines; i++ {
+		<-done
+	}
+
+	// Exactly one should return true
+	trueCount := 0
+	for i, wasSet := range results {
+		if wasSet {
+			trueCount++
+			t.Logf("Goroutine %d successfully set the key", i)
+		}
+	}
+
+	if trueCount != 1 {
+		t.Fatalf("Expected exactly 1 goroutine to succeed, got %d", trueCount)
+	}
+
+	// Verify the key exists
+	if !kv.Has("race_key") {
+		t.Fatal("Key should exist after concurrent SetNX")
 	}
 }
 
@@ -1085,7 +1131,7 @@ func TestExoticTableIsolation(t *testing.T) {
 }
 
 func TestSetNZRat(t *testing.T) {
-	kv := New[string, *rat.Rational]("", "test_setnz_rat")
+	kv := New[string, *rat.Rational]("test_setnz_rat")
 
 	kv.Clear()
 
@@ -1104,4 +1150,6 @@ func TestSetNZRat(t *testing.T) {
 	if !kv.Get("key1").Equal(100) {
 		t.Fatalf("Expected value to remain unchanged after SetNZ with non-zero value")
 	}
+
+	kv.Purge()
 }

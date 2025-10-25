@@ -312,12 +312,48 @@ func (kv *KV[K, V]) Purge() {
 	}
 }
 
-// SetNX sets a value only if the key doesn't exist, returns the current value
-func (kv *KV[K, V]) SetNX(key K, value V) V {
-	if kv.Has(key) {
-		return kv.Get(key)
+// SetNX sets a value only if the key doesn't exist, returns true if the value was set
+func (kv *KV[K, V]) SetNX(key K, value V) bool {
+	wasSet, err := kv.TrySetNX(key, value)
+	if err != nil {
+		panic(err)
 	}
-	return kv.Set(key, value)
+	return wasSet
+}
+
+// TrySetNX sets a value only if the key doesn't exist, returns true if the value was set
+func (kv *KV[K, V]) TrySetNX(key K, value V) (bool, error) {
+	keyStr, err := marshal(key)
+	if err != nil {
+		return false, err
+	}
+	valueStr, err := marshal(value)
+	if err != nil {
+		return false, err
+	}
+
+	query := `
+		INSERT INTO ` + kv.tableName + ` (key, value)
+		VALUES ($1, $2)
+		ON CONFLICT (key) DO NOTHING
+		RETURNING value
+	`
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+
+	var resultStr string
+	err = kv.db.QueryRow(ctx, query, keyStr, valueStr).Scan(&resultStr)
+
+	// If no rows returned, key already existed
+	if err == pgx.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	// Successfully inserted
+	return true, nil
 }
 
 // SetNZ sets a value only if it's not zero, returns the value
