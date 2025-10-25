@@ -1,26 +1,28 @@
 package main
 
 import (
-	"fmt"
+	"log"
 	"time"
 
 	"github.com/xtdlib/pgkv"
 )
 
 func main() {
-	kv := pgkv.New[string, time.Time]("", "tim2etest2")
-	kv2 := pgkv.New[time.Time, string]("", "tim2etest23")
+	kv := pgkv.New[time.Time, string]("testtime")
+	_ = kv
 	kv.Clear()
-	kv2.Clear()
 
-	kv.Set("1", time.Now())
-	kv2.Set(time.Now(), "1")
+	now := time.Now()
+	kv.Set(now, "hello")
+	for k, v := range kv.All {
+		_ = v
+		if !k.Equal(now) {
+			panic("key mismatch")
+		}
 
-	for _, v := range kv.All {
-		fmt.Println(v.Local())
-	}
-
-	for k, _ := range kv2.All {
-		fmt.Println(k.Local())
+		if v != "hello" {
+			panic("value mismatch")
+		}
+		log.Println("key:", k, "value:", v)
 	}
 }

@@ -10,7 +10,7 @@ import (
 )
 
 func TestKeys(t *testing.T) {
-	kv := New[string, string]("", "test_keys")
+	kv := New[string, string]("test_keys")
 
 	kv.Clear()
 
@@ -61,7 +61,7 @@ func TestKeys(t *testing.T) {
 }
 
 func TestKeysBackward(t *testing.T) {
-	kv := New[string, string]("", "test_keys_backward")
+	kv := New[string, string]("test_keys_backward")
 
 	kv.Clear()
 
@@ -112,7 +112,7 @@ func TestKeysBackward(t *testing.T) {
 }
 
 func TestHas(t *testing.T) {
-	kv := New[string, int]("", "test_has")
+	kv := New[string, int]("test_has")
 
 	kv.Clear()
 
@@ -129,7 +129,7 @@ func TestHas(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	kv := New[string, int]("", "test_delete")
+	kv := New[string, int]("test_delete")
 
 	kv.Clear()
 
@@ -145,7 +145,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestClear(t *testing.T) {
-	kv := New[string, string]("", "test_clear")
+	kv := New[string, string]("test_clear")
 
 	kv.Set("key1", "val1")
 	kv.Set("key2", "val2")
@@ -165,7 +165,7 @@ func TestClear(t *testing.T) {
 }
 
 func TestGetOr(t *testing.T) {
-	kv := New[string, int]("", "test_getor")
+	kv := New[string, int]("test_getor")
 
 	kv.Clear()
 
@@ -184,7 +184,7 @@ func TestGetOr(t *testing.T) {
 }
 
 func TestSetNX(t *testing.T) {
-	kv := New[string, int]("", "test_setnx")
+	kv := New[string, int]("test_setnx")
 
 	kv.Clear()
 
@@ -202,7 +202,7 @@ func TestSetNX(t *testing.T) {
 }
 
 func TestSetNZ(t *testing.T) {
-	kv := New[string, int]("", "test_setnz")
+	kv := New[string, int]("test_setnz")
 
 	kv.Clear()
 
@@ -223,7 +223,7 @@ func TestSetNZ(t *testing.T) {
 }
 
 func TestTryGet(t *testing.T) {
-	kv := New[string, int]("", "test_tryget")
+	kv := New[string, int]("test_tryget")
 
 	kv.Clear()
 
@@ -245,7 +245,7 @@ func TestTryGet(t *testing.T) {
 }
 
 func TestTryHas(t *testing.T) {
-	kv := New[string, int]("", "test_tryhas")
+	kv := New[string, int]("test_tryhas")
 
 	kv.Clear()
 
@@ -270,7 +270,7 @@ func TestTryHas(t *testing.T) {
 }
 
 func TestComparable(t *testing.T) {
-	kv := New[int, []byte]("", "bytes")
+	kv := New[int, []byte]("bytes")
 	_ = kv
 
 	kv.Clear()
@@ -301,7 +301,7 @@ func TestComparable(t *testing.T) {
 
 // TestTypeString tests string key and string value
 func TestTypeString(t *testing.T) {
-	kv := New[string, string]("", "test_type_string")
+	kv := New[string, string]("test_type_string")
 	kv.Clear()
 
 	kv.Set("hello", "world")
@@ -319,7 +319,7 @@ func TestTypeString(t *testing.T) {
 
 // TestTypeTimeKey tests time.Time as key (should use TIMESTAMP column)
 func TestTypeTimeKey(t *testing.T) {
-	kv := New[time.Time, string]("", "test_type_time_key")
+	kv := New[time.Time, string]("test_type_time_key")
 	kv.Clear()
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -347,7 +347,7 @@ func TestTypeTimeKey(t *testing.T) {
 
 // TestTypeTimeValue tests time.Time as value
 func TestTypeTimeValue(t *testing.T) {
-	kv := New[string, time.Time]("", "test_type_time_value")
+	kv := New[string, time.Time]("test_type_time_value")
 	kv.Clear()
 
 	testTime := time.Date(2025, 10, 20, 12, 30, 45, 123456789, time.UTC)
@@ -364,7 +364,7 @@ func TestTypeTimeValue(t *testing.T) {
 // TestTypeIntKeys tests various integer types as keys
 func TestTypeIntKeys(t *testing.T) {
 	// Test int
-	kvInt := New[int, string]("", "test_type_int_key")
+	kvInt := New[int, string]("test_type_int_key")
 	kvInt.Clear()
 	kvInt.Set(42, "forty-two")
 	if val := kvInt.Get(42); val != "forty-two" {
@@ -373,7 +373,7 @@ func TestTypeIntKeys(t *testing.T) {
 	kvInt.Purge()
 
 	// Test int64
-	kvInt64 := New[int64, string]("", "test_type_int64_key")
+	kvInt64 := New[int64, string]("test_type_int64_key")
 	kvInt64.Clear()
 	kvInt64.Set(int64(9223372036854775807), "max_int64")
 	if val := kvInt64.Get(9223372036854775807); val != "max_int64" {
@@ -382,7 +382,7 @@ func TestTypeIntKeys(t *testing.T) {
 	kvInt64.Purge()
 
 	// Test uint
-	kvUint := New[uint, string]("", "test_type_uint_key")
+	kvUint := New[uint, string]("test_type_uint_key")
 	kvUint.Clear()
 	kvUint.Set(uint(123), "unsigned")
 	if val := kvUint.Get(123); val != "unsigned" {
@@ -391,7 +391,7 @@ func TestTypeIntKeys(t *testing.T) {
 	kvUint.Purge()
 
 	// Test uint64
-	kvUint64 := New[uint64, string]("", "test_type_uint64_key")
+	kvUint64 := New[uint64, string]("test_type_uint64_key")
 	kvUint64.Clear()
 	kvUint64.Set(uint64(18446744073709551615), "max_uint64")
 	if val := kvUint64.Get(18446744073709551615); val != "max_uint64" {
@@ -402,7 +402,7 @@ func TestTypeIntKeys(t *testing.T) {
 
 // TestTypeIntValues tests various integer types as values
 func TestTypeIntValues(t *testing.T) {
-	kvInt := New[string, int]("", "test_type_int_value")
+	kvInt := New[string, int]("test_type_int_value")
 	kvInt.Clear()
 	kvInt.Set("answer", 42)
 	if val := kvInt.Get("answer"); val != 42 {
@@ -410,7 +410,7 @@ func TestTypeIntValues(t *testing.T) {
 	}
 	kvInt.Purge()
 
-	kvInt8 := New[string, int8]("", "test_type_int8_value")
+	kvInt8 := New[string, int8]("test_type_int8_value")
 	kvInt8.Clear()
 	kvInt8.Set("small", int8(127))
 	if val := kvInt8.Get("small"); val != 127 {
@@ -418,7 +418,7 @@ func TestTypeIntValues(t *testing.T) {
 	}
 	kvInt8.Purge()
 
-	kvUint32 := New[string, uint32]("", "test_type_uint32_value")
+	kvUint32 := New[string, uint32]("test_type_uint32_value")
 	kvUint32.Clear()
 	kvUint32.Set("big", uint32(4294967295))
 	if val := kvUint32.Get("big"); val != 4294967295 {
@@ -434,7 +434,7 @@ func TestTypeStruct(t *testing.T) {
 		Age  int
 	}
 
-	kv := New[string, Person]("", "test_type_struct")
+	kv := New[string, Person]("test_type_struct")
 	kv.Clear()
 
 	person := Person{Name: "Alice", Age: 30}
@@ -455,7 +455,7 @@ func TestTypeStructPointer(t *testing.T) {
 		Port int
 	}
 
-	kv := New[string, *Config]("", "test_type_struct_pointer")
+	kv := New[string, *Config]("test_type_struct_pointer")
 	kv.Clear()
 
 	config := &Config{Host: "localhost", Port: 8080}
@@ -474,7 +474,7 @@ func TestTypeStructPointer(t *testing.T) {
 
 // TestTypeSlice tests slice types (JSON marshaled)
 func TestTypeSlice(t *testing.T) {
-	kv := New[string, []int]("", "test_type_slice")
+	kv := New[string, []int]("test_type_slice")
 	kv.Clear()
 
 	nums := []int{1, 2, 3, 4, 5}
@@ -495,7 +495,7 @@ func TestTypeSlice(t *testing.T) {
 
 // TestTypeMap tests map types (JSON marshaled)
 func TestTypeMap(t *testing.T) {
-	kv := New[string, map[string]int]("", "test_type_map")
+	kv := New[string, map[string]int]("test_type_map")
 	kv.Clear()
 
 	scores := map[string]int{"alice": 100, "bob": 95}
@@ -537,7 +537,7 @@ func (c CustomScanner) String() string {
 // TestTypeSqlScanner tests types implementing sql.Scanner and fmt.Stringer
 // Note: When both sql.Scanner and fmt.Stringer are implemented, fmt.Stringer takes precedence for marshaling
 func TestTypeSqlScanner(t *testing.T) {
-	kv := New[string, *CustomScanner]("", "test_type_scanner")
+	kv := New[string, *CustomScanner]("test_type_scanner")
 	kv.Clear()
 
 	custom := &CustomScanner{Value: "test_value"}
@@ -558,7 +558,7 @@ func TestTypeSqlScanner(t *testing.T) {
 
 // TestTypeByteSlice tests []byte type
 func TestTypeByteSlice(t *testing.T) {
-	kv := New[string, []byte]("", "test_type_bytes")
+	kv := New[string, []byte]("test_type_bytes")
 	kv.Clear()
 
 	data := []byte{0x01, 0x02, 0x03, 0xFF}
@@ -574,7 +574,7 @@ func TestTypeByteSlice(t *testing.T) {
 
 // TestTypeBool tests bool type (JSON marshaled)
 func TestTypeBool(t *testing.T) {
-	kv := New[string, bool]("", "test_type_bool")
+	kv := New[string, bool]("test_type_bool")
 	kv.Clear()
 
 	kv.Set("enabled", true)
@@ -592,7 +592,7 @@ func TestTypeBool(t *testing.T) {
 
 // TestTypeFloat tests float types (JSON marshaled)
 func TestTypeFloat(t *testing.T) {
-	kv := New[string, float64]("", "test_type_float")
+	kv := New[string, float64]("test_type_float")
 	kv.Clear()
 
 	kv.Set("pi", 3.14159265359)
@@ -606,7 +606,7 @@ func TestTypeFloat(t *testing.T) {
 
 // TestTypeAllIterator tests the All iterator with various types
 func TestTypeAllIterator(t *testing.T) {
-	kv := New[int, string]("", "test_type_all_iterator")
+	kv := New[int, string]("test_type_all_iterator")
 	kv.Clear()
 
 	kv.Set(1, "one")
@@ -648,7 +648,7 @@ func TestExoticNestedStructs(t *testing.T) {
 		Salary   *float64
 	}
 
-	kv := New[string, Employee]("", "test_exotic_nested")
+	kv := New[string, Employee]("test_exotic_nested")
 	kv.Clear()
 
 	salary := 75000.50
@@ -702,7 +702,7 @@ func TestExoticNilAndEmpty(t *testing.T) {
 		NilMap    map[string]string
 	}
 
-	kv := New[string, Container]("", "test_exotic_nil_empty")
+	kv := New[string, Container]("test_exotic_nil_empty")
 	kv.Clear()
 
 	// Test with all nil/empty
@@ -741,7 +741,7 @@ func TestExoticNilAndEmpty(t *testing.T) {
 
 // TestExoticConcurrentWrites tests concurrent Set operations
 func TestExoticConcurrentWrites(t *testing.T) {
-	kv := New[string, int]("", "test_exotic_concurrent")
+	kv := New[string, int]("test_exotic_concurrent")
 	kv.Clear()
 
 	done := make(chan bool, 10)
@@ -772,7 +772,7 @@ func TestExoticConcurrentWrites(t *testing.T) {
 
 // TestExoticUpdateConcurrent tests Update() with concurrent modifications
 func TestExoticUpdateConcurrent(t *testing.T) {
-	kv := New[string, int]("", "test_exotic_update_concurrent")
+	kv := New[string, int]("test_exotic_update_concurrent")
 	kv.Clear()
 
 	kv.Set("counter", 0)
@@ -803,7 +803,7 @@ func TestExoticUpdateConcurrent(t *testing.T) {
 
 // TestExoticLargeData tests handling of large strings and byte slices
 func TestExoticLargeData(t *testing.T) {
-	kv := New[string, []byte]("", "test_exotic_large")
+	kv := New[string, []byte]("test_exotic_large")
 	kv.Clear()
 
 	// Create 1MB of data
@@ -827,7 +827,7 @@ func TestExoticLargeData(t *testing.T) {
 
 // TestExoticLargeString tests very large string values
 func TestExoticLargeString(t *testing.T) {
-	kv := New[string, string]("", "test_exotic_large_string")
+	kv := New[string, string]("test_exotic_large_string")
 	kv.Clear()
 
 	// Create 100KB string with valid UTF-8 (repeating pattern)
@@ -859,7 +859,7 @@ func TestExoticSliceOfStructs(t *testing.T) {
 		Price float64
 	}
 
-	kv := New[string, []Item]("", "test_exotic_slice_structs")
+	kv := New[string, []Item]("test_exotic_slice_structs")
 	kv.Clear()
 
 	items := []Item{
@@ -883,7 +883,7 @@ func TestExoticSliceOfStructs(t *testing.T) {
 
 // TestExoticMapOfSlices tests map with slice values
 func TestExoticMapOfSlices(t *testing.T) {
-	kv := New[string, map[string][]int]("", "test_exotic_map_slices")
+	kv := New[string, map[string][]int]("test_exotic_map_slices")
 	kv.Clear()
 
 	data := map[string][]int{
@@ -907,7 +907,7 @@ func TestExoticMapOfSlices(t *testing.T) {
 
 // TestExoticInterfaceSlice tests []interface{} with mixed types
 func TestExoticInterfaceSlice(t *testing.T) {
-	kv := New[string, []interface{}]("", "test_exotic_interface_slice")
+	kv := New[string, []interface{}]("test_exotic_interface_slice")
 	kv.Clear()
 
 	mixed := []interface{}{
@@ -944,7 +944,7 @@ func TestExoticUpdateWithStruct(t *testing.T) {
 		Locked  bool
 	}
 
-	kv := New[string, Account]("", "test_exotic_update_struct")
+	kv := New[string, Account]("test_exotic_update_struct")
 	kv.Clear()
 
 	kv.Set("account123", Account{Balance: 1000, Locked: false})
@@ -973,7 +973,7 @@ func TestExoticUpdateWithStruct(t *testing.T) {
 
 // TestExoticSpecialCharactersInKeys tests keys with special characters
 func TestExoticSpecialCharactersInKeys(t *testing.T) {
-	kv := New[string, string]("", "test_exotic_special_keys")
+	kv := New[string, string]("test_exotic_special_keys")
 	kv.Clear()
 
 	specialKeys := []string{
@@ -1026,7 +1026,7 @@ func TestExoticSpecialCharactersInKeys(t *testing.T) {
 // TestExoticZeroValues tests behavior with zero values
 func TestExoticZeroValues(t *testing.T) {
 	// Test zero int
-	kvInt := New[string, int]("", "test_exotic_zero_int")
+	kvInt := New[string, int]("test_exotic_zero_int")
 	kvInt.Clear()
 	kvInt.Set("zero", 0)
 	if val := kvInt.Get("zero"); val != 0 {
@@ -1035,7 +1035,7 @@ func TestExoticZeroValues(t *testing.T) {
 	kvInt.Purge()
 
 	// Test empty string
-	kvStr := New[string, string]("", "test_exotic_zero_string")
+	kvStr := New[string, string]("test_exotic_zero_string")
 	kvStr.Clear()
 	kvStr.Set("empty", "")
 	if val := kvStr.Get("empty"); val != "" {
@@ -1044,7 +1044,7 @@ func TestExoticZeroValues(t *testing.T) {
 	kvStr.Purge()
 
 	// Test zero time
-	kvTime := New[string, time.Time]("", "test_exotic_zero_time")
+	kvTime := New[string, time.Time]("test_exotic_zero_time")
 	kvTime.Clear()
 	zeroTime := time.Time{}
 	kvTime.Set("zero", zeroTime)
@@ -1059,7 +1059,7 @@ func TestExoticZeroValues(t *testing.T) {
 func TestExoticTableIsolation(t *testing.T) {
 	// Test that two different table names don't interfere
 	// We use a single test to avoid creating too many connection pools
-	kv := New[string, int]("", "test_exotic_table_isolation")
+	kv := New[string, int]("test_exotic_table_isolation")
 	kv.Clear()
 	kv.Set("key1", 100)
 	kv.Set("key2", 200)

@@ -8,10 +8,7 @@ import (
 )
 
 func main() {
-	kv, err := pgkv.New[string, *rat.Rational]("", "xxx")
-	if err != nil {
-		panic(err)
-	}
+	kv := pgkv.New[string, *rat.Rational]("rat")
 
 	kv.Clear()
 

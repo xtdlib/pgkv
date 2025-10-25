@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	kv := pgkv.New[*rat.Rational, *rat.Rational]("", "same")
+	kv := pgkv.New[*rat.Rational, *rat.Rational]("test_ratx", pgkv.DSN(""))
 
 	key := rat.Rat(0)
 
@@ -33,4 +33,6 @@ func main() {
 	for k, v := range kv.All {
 		log.Println(k, v)
 	}
+
+	kv.Purge()
 }

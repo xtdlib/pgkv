@@ -9,7 +9,7 @@ import (
 
 // TestAddRatConcurrent tests concurrent AddRat operations for atomicity
 func TestAddRatConcurrent(t *testing.T) {
-	kv := New[string, *rat.Rational]("", "test_addrat_concurrent")
+	kv := New[string, *rat.Rational]("test_addrat_concurrent")
 	kv.Clear()
 
 	// Initialize with 0
@@ -38,7 +38,7 @@ func TestAddRatConcurrent(t *testing.T) {
 
 // TestAddRatConcurrentFractional tests concurrent fractional additions
 func TestAddRatConcurrentFractional(t *testing.T) {
-	kv := New[string, *rat.Rational]("", "test_addrat_fractional")
+	kv := New[string, *rat.Rational]("test_addrat_fractional")
 	kv.Clear()
 
 	kv.Set("sum", rat.Rat(0))
@@ -66,7 +66,7 @@ func TestAddRatConcurrentFractional(t *testing.T) {
 
 // TestAddRatConcurrentMixed tests concurrent mixed operations
 func TestAddRatConcurrentMixed(t *testing.T) {
-	kv := New[string, *rat.Rational]("", "test_addrat_mixed")
+	kv := New[string, *rat.Rational]("test_addrat_mixed")
 	kv.Clear()
 
 	kv.Set("balance", rat.Rat(1000))

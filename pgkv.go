@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -18,16 +19,52 @@ import (
 )
 
 type KV[K comparable, V any] struct {
-	db        *pgxpool.Pool
+	db              *pgxpool.Pool
+	tableName       string
+	keyNeedsMarshal bool // true if key type is stored as TEXT and needs marshal/unmarshal
+}
+
+// Option is a functional option for configuring KV
+type Option func(*config)
+
+type config struct {
+	dsn       string
 	tableName string
 }
 
-// TryNew creates a new KV store with the given table name and initializes the table
-func TryNew[K comparable, V any](dsn string, tableName string) (*KV[K, V], error) {
+// DSN sets the PostgreSQL connection string
+func DSN(dsn string) Option {
+	return func(c *config) {
+		c.dsn = dsn
+	}
+}
+
+// Table sets the table name
+func Table(name string) Option {
+	return func(c *config) {
+		c.tableName = name
+	}
+}
+
+// TryNew creates a new KV store with required table name and optional configuration.
+// Uses PGKV_DSN env var or defaults to localhost postgres if DSN not provided.
+func TryNew[K comparable, V any](tableName string, opts ...Option) (*KV[K, V], error) {
+	tableName = strings.ReplaceAll(tableName, "-", "_")
+
+	cfg := &config{
+		tableName: tableName,
+	}
+
+	// Apply options
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	// Resolve DSN
+	dsn := cfg.dsn
 	if dsn == "" && os.Getenv("PGKV_DSN") != "" {
 		dsn = os.Getenv("PGKV_DSN")
 	}
-
 	if dsn == "" {
 		dsn = "postgres://postgres:postgres@localhost:5432/postgres"
 	}
@@ -39,27 +76,32 @@ func TryNew[K comparable, V any](dsn string, tableName string) (*KV[K, V], error
 
 	kv := &KV[K, V]{
 		db:        pool,
-		tableName: tableName,
+		tableName: cfg.tableName,
 	}
 
 	var k K
 	keyType := "TEXT"
-	if _, ok := any(k).(time.Time); ok {
-		keyType = "TIMESTAMPTZ"
-	}
+	kv.keyNeedsMarshal = true // default to true for TEXT type
 	switch any(k).(type) {
+	case time.Time, *time.Time:
+		keyType = "BIGINT"
+		kv.keyNeedsMarshal = false
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		keyType = "BIGINT"
+		kv.keyNeedsMarshal = false
+	case float32, float64:
+		keyType = "DOUBLE PRECISION"
+		kv.keyNeedsMarshal = false
 	}
 
 	query := `
-		CREATE TABLE IF NOT EXISTS ` + tableName + ` (
+		CREATE TABLE IF NOT EXISTS ` + cfg.tableName + ` (
 			key ` + keyType + ` PRIMARY KEY,
 			value TEXT NOT NULL
 		)
 	`
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 	_, err = kv.db.Exec(ctx, query)
 	if err != nil {
@@ -69,9 +111,10 @@ func TryNew[K comparable, V any](dsn string, tableName string) (*KV[K, V], error
 	return kv, nil
 }
 
-// New creates a new KV store with the given table name and initializes the table, panics on error
-func New[K comparable, V any](dsn string, tableName string) *KV[K, V] {
-	kv, err := TryNew[K, V](dsn, tableName)
+// New creates a new KV store with required table name and optional configuration, panics on error.
+// Uses PGKV_DSN env var or defaults to localhost postgres if DSN not provided.
+func New[K comparable, V any](tableName string, opts ...Option) *KV[K, V] {
+	kv, err := TryNew[K, V](tableName, opts...)
 	if err != nil {
 		panic(err)
 	}
@@ -98,7 +141,7 @@ func (kv *KV[K, V]) TrySet(key K, value V) (V, error) {
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
 		RETURNING (SELECT value FROM old) AS old_value
 	`
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
 	var oldValueStr sql.NullString
@@ -154,7 +197,7 @@ func (kv *KV[K, V]) TryGet(key K) (V, error) {
 
 	var valueStr string
 	query := `SELECT value FROM ` + kv.tableName + ` WHERE key = $1`
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 	err = kv.db.QueryRow(ctx, query, keyStr).Scan(&valueStr)
 	if err != nil {
@@ -195,7 +238,7 @@ func (kv *KV[K, V]) TryHas(key K) (bool, error) {
 
 	var exists int
 	query := `SELECT 1 FROM ` + kv.tableName + ` WHERE key = $1 LIMIT 1`
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 	err = kv.db.QueryRow(ctx, query, keyStr).Scan(&exists)
 	if err == pgx.ErrNoRows {
@@ -224,7 +267,7 @@ func (kv *KV[K, V]) TryDelete(key K) error {
 	}
 
 	query := `DELETE FROM ` + kv.tableName + ` WHERE key = $1`
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 	_, err = kv.db.Exec(ctx, query, keyStr)
 	return err
@@ -240,7 +283,7 @@ func (kv *KV[K, V]) Delete(key K) {
 // TryClear removes all key-value pairs, returning an error if it fails
 func (kv *KV[K, V]) TryClear() error {
 	query := `DELETE FROM ` + kv.tableName
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 	_, err := kv.db.Exec(ctx, query)
 	return err
@@ -256,7 +299,7 @@ func (kv *KV[K, V]) Clear() {
 // TryPurge removes the table, returning an error if it fails
 func (kv *KV[K, V]) TryPurge() error {
 	query := `DROP TABLE IF EXISTS ` + kv.tableName
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 	_, err := kv.db.Exec(ctx, query)
 	return err
@@ -331,7 +374,7 @@ func (kv *KV[K, V]) Update(key K, fn func(V) V) (V, error) {
 		return result, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
 	tx, err := kv.db.Begin(ctx)
@@ -386,9 +429,21 @@ func marshal(v any) (string, error) {
 	case string:
 		return val, nil
 	case time.Time:
-		return val.Format(time.RFC3339Nano), nil
+		if val.IsZero() {
+			return "0", nil
+		}
+		return strconv.FormatInt(val.UnixNano(), 10), nil
+	case *time.Time:
+		if val == nil || val.IsZero() {
+			return "0", nil
+		}
+		return strconv.FormatInt(val.UnixNano(), 10), nil
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 		return strconv.FormatInt(toInt64(val), 10), nil
+	case float32:
+		return strconv.FormatFloat(float64(val), 'f', -1, 32), nil
+	case float64:
+		return strconv.FormatFloat(val, 'f', -1, 64), nil
 	default:
 		// Check if the type implements fmt.Stringer for text representation
 		if stringer, ok := v.(fmt.Stringer); ok {
@@ -405,11 +460,27 @@ func unmarshal(s string, v any) error {
 		*val = s
 		return nil
 	case *time.Time:
-		t, err := time.Parse(time.RFC3339Nano, s)
+		nanos, err := strconv.ParseInt(s, 10, 64)
 		if err != nil {
 			return err
 		}
-		*val = t
+		if nanos == 0 {
+			*val = time.Time{}
+		} else {
+			*val = time.Unix(0, nanos)
+		}
+		return nil
+	case **time.Time:
+		nanos, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return err
+		}
+		if nanos == 0 {
+			*val = nil
+			return nil
+		}
+		t := time.Unix(0, nanos)
+		*val = &t
 		return nil
 	case *int, *int8, *int16, *int32, *int64, *uint, *uint8, *uint16, *uint32, *uint64:
 		i, err := strconv.ParseInt(s, 10, 64)
@@ -417,6 +488,20 @@ func unmarshal(s string, v any) error {
 			return err
 		}
 		setInt(val, i)
+		return nil
+	case *float32:
+		f, err := strconv.ParseFloat(s, 32)
+		if err != nil {
+			return err
+		}
+		*val = float32(f)
+		return nil
+	case *float64:
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return err
+		}
+		*val = f
 		return nil
 	default:
 		// Check if v is **T where *T implements sql.Scanner
@@ -496,12 +581,49 @@ func setInt(v any, i int64) {
 
 // newScanTarget creates a new scan target for type T.
 // If T is a pointer type, it creates a new instance of the pointed-to type.
+// For time.Time types, it returns an int64 target and converts on getValue.
+// For float types, it returns a float64 target and converts on getValue.
 func newScanTarget[T any]() (target any, getValue func() T) {
 	var zero T
 	rt := reflect.TypeOf(zero)
 
+	// Handle time.Time - scan as int64 (UnixNano)
+	if _, ok := any(zero).(time.Time); ok {
+		var nanos int64
+		return &nanos, func() T {
+			t := time.Unix(0, nanos)
+			return any(t).(T)
+		}
+	}
+
+	// Handle float types - scan directly as float64
+	if _, ok := any(zero).(float32); ok {
+		var f float64
+		return &f, func() T {
+			return any(float32(f)).(T)
+		}
+	}
+	if _, ok := any(zero).(float64); ok {
+		var f float64
+		return &f, func() T {
+			return any(f).(T)
+		}
+	}
+
 	if rt != nil && rt.Kind() == reflect.Ptr {
-		// T is a pointer type, create new instance of the element type
+		// Check if it's *time.Time
+		if rt.Elem() == reflect.TypeOf(time.Time{}) {
+			var nanos int64
+			return &nanos, func() T {
+				if nanos == 0 {
+					return zero // nil pointer
+				}
+				t := time.Unix(0, nanos)
+				return any(&t).(T)
+			}
+		}
+
+		// Other pointer types
 		elem := reflect.New(rt.Elem())
 		return elem.Interface(), func() T {
 			return elem.Interface().(T)
@@ -527,6 +649,20 @@ func (kv *KV[K, V]) Keys(yield func(K) bool) {
 	defer rows.Close()
 
 	keys, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (K, error) {
+		if kv.keyNeedsMarshal {
+			var keyStr string
+			if err := row.Scan(&keyStr); err != nil {
+				var zero K
+				return zero, err
+			}
+			target, getValue := newScanTarget[K]()
+			if err := unmarshal(keyStr, target); err != nil {
+				var zero K
+				return zero, err
+			}
+			return getValue(), nil
+		}
+		// Native type key (time.Time or integer) scanned directly from PostgreSQL
 		target, getValue := newScanTarget[K]()
 		err := row.Scan(target)
 		return getValue(), err
@@ -554,6 +690,20 @@ func (kv *KV[K, V]) KeysBackward(yield func(K) bool) {
 	defer rows.Close()
 
 	keys, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (K, error) {
+		if kv.keyNeedsMarshal {
+			var keyStr string
+			if err := row.Scan(&keyStr); err != nil {
+				var zero K
+				return zero, err
+			}
+			target, getValue := newScanTarget[K]()
+			if err := unmarshal(keyStr, target); err != nil {
+				var zero K
+				return zero, err
+			}
+			return getValue(), nil
+		}
+		// Native type key (time.Time or integer) scanned directly from PostgreSQL
 		target, getValue := newScanTarget[K]()
 		err := row.Scan(target)
 		return getValue(), err
@@ -586,10 +736,26 @@ func (kv *KV[K, V]) All(yield func(K, V) bool) {
 	}
 
 	pairs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (kvPair, error) {
-		keyTarget, getKey := newScanTarget[K]()
+		var key K
 		var valueStr string
-		if err := row.Scan(keyTarget, &valueStr); err != nil {
-			return kvPair{}, err
+
+		if kv.keyNeedsMarshal {
+			var keyStr string
+			if err := row.Scan(&keyStr, &valueStr); err != nil {
+				return kvPair{}, err
+			}
+			keyTarget, getKey := newScanTarget[K]()
+			if err := unmarshal(keyStr, keyTarget); err != nil {
+				return kvPair{}, err
+			}
+			key = getKey()
+		} else {
+			// Native type key (time.Time or integer) scanned directly from PostgreSQL
+			keyTarget, getKey := newScanTarget[K]()
+			if err := row.Scan(keyTarget, &valueStr); err != nil {
+				return kvPair{}, err
+			}
+			key = getKey()
 		}
 
 		valTarget, getVal := newScanTarget[V]()
@@ -597,7 +763,7 @@ func (kv *KV[K, V]) All(yield func(K, V) bool) {
 			return kvPair{}, err
 		}
 
-		return kvPair{key: getKey(), value: getVal()}, nil
+		return kvPair{key: key, value: getVal()}, nil
 	})
 	if err != nil {
 		panic(err)
@@ -623,6 +789,20 @@ func (kv *KV[K, V]) KeysWhere(whereClause string) func(yield func(K) bool) {
 		defer rows.Close()
 
 		keys, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (K, error) {
+			if kv.keyNeedsMarshal {
+				var keyStr string
+				if err := row.Scan(&keyStr); err != nil {
+					var zero K
+					return zero, err
+				}
+				target, getValue := newScanTarget[K]()
+				if err := unmarshal(keyStr, target); err != nil {
+					var zero K
+					return zero, err
+				}
+				return getValue(), nil
+			}
+			// Native type key (time.Time or integer) scanned directly from PostgreSQL
 			target, getValue := newScanTarget[K]()
 			err := row.Scan(target)
 			return getValue(), err
@@ -657,10 +837,26 @@ func (kv *KV[K, V]) AllWhere(whereClause string) func(yield func(K, V) bool) {
 		}
 
 		pairs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (kvPair, error) {
-			keyTarget, getKey := newScanTarget[K]()
+			var key K
 			var valueStr string
-			if err := row.Scan(keyTarget, &valueStr); err != nil {
-				return kvPair{}, err
+
+			if kv.keyNeedsMarshal {
+				var keyStr string
+				if err := row.Scan(&keyStr, &valueStr); err != nil {
+					return kvPair{}, err
+				}
+				keyTarget, getKey := newScanTarget[K]()
+				if err := unmarshal(keyStr, keyTarget); err != nil {
+					return kvPair{}, err
+				}
+				key = getKey()
+			} else {
+				// Native type key (time.Time or integer) scanned directly from PostgreSQL
+				keyTarget, getKey := newScanTarget[K]()
+				if err := row.Scan(keyTarget, &valueStr); err != nil {
+					return kvPair{}, err
+				}
+				key = getKey()
 			}
 
 			valTarget, getVal := newScanTarget[V]()
@@ -668,7 +864,7 @@ func (kv *KV[K, V]) AllWhere(whereClause string) func(yield func(K, V) bool) {
 				return kvPair{}, err
 			}
 
-			return kvPair{key: getKey(), value: getVal()}, nil
+			return kvPair{key: key, value: getVal()}, nil
 		})
 		if err != nil {
 			panic(err)
