@@ -19,9 +19,10 @@ import (
 )
 
 type KV[K comparable, V any] struct {
-	db              *pgxpool.Pool
-	tableName       string
-	keyNeedsMarshal bool // true if key type is stored as TEXT and needs marshal/unmarshal
+	db                *pgxpool.Pool
+	tableName         string
+	keyNeedsMarshal   bool // true if key type is stored as TEXT and needs marshal/unmarshal
+	valueNeedsMarshal bool // true if value type is stored as TEXT and needs marshal/unmarshal
 }
 
 // Option is a functional option for configuring KV
@@ -80,9 +81,43 @@ func TryNew[K comparable, V any](tableName string, opts ...Option) (*KV[K, V], e
 	}
 
 	var k K
-	keyType := "TEXT"
-	kv.keyNeedsMarshal = true // default to true for TEXT type
+	keyType := "JSON"
+	kv.keyNeedsMarshal = true // default to true for JSON type
+
+	// Check if type implements both sql.Scanner and fmt.Stringer - if so, use TEXT
+	_, implementsScanner := any(k).(sql.Scanner)
+	_, implementsStringer := any(k).(fmt.Stringer)
+	if !implementsScanner || !implementsStringer {
+		rv := reflect.ValueOf(k)
+		if rv.Kind() == reflect.Ptr {
+			// For pointer types, create an instance to check
+			if rv.IsNil() && rv.Type().Elem().Kind() != reflect.Interface {
+				newVal := reflect.New(rv.Type().Elem())
+				if !implementsScanner {
+					_, implementsScanner = newVal.Interface().(sql.Scanner)
+				}
+				if !implementsStringer {
+					_, implementsStringer = newVal.Interface().(fmt.Stringer)
+				}
+			}
+		}
+	}
+
+	if implementsScanner && implementsStringer {
+		keyType = "TEXT"
+		kv.keyNeedsMarshal = true // Still needs marshal, but will use String() method
+	}
+
 	switch any(k).(type) {
+	case string:
+		keyType = "TEXT"
+		kv.keyNeedsMarshal = false
+	case []byte:
+		keyType = "BYTEA"
+		kv.keyNeedsMarshal = false
+	case bool:
+		keyType = "BOOLEAN"
+		kv.keyNeedsMarshal = false
 	case time.Time, *time.Time:
 		keyType = "BIGINT"
 		kv.keyNeedsMarshal = false
@@ -94,18 +129,130 @@ func TryNew[K comparable, V any](tableName string, opts ...Option) (*KV[K, V], e
 		kv.keyNeedsMarshal = false
 	}
 
-	query := `
-		CREATE TABLE IF NOT EXISTS ` + cfg.tableName + ` (
-			key ` + keyType + ` PRIMARY KEY,
-			value TEXT NOT NULL
-		)
-	`
+	var v V
+	valueType := "JSON"
+	kv.valueNeedsMarshal = true // default to true for JSON type
+
+	// Check if type implements both sql.Scanner and fmt.Stringer - if so, use TEXT
+	_, valueImplementsScanner := any(v).(sql.Scanner)
+	_, valueImplementsStringer := any(v).(fmt.Stringer)
+	if !valueImplementsScanner || !valueImplementsStringer {
+		rv := reflect.ValueOf(v)
+		if rv.Kind() == reflect.Ptr {
+			// For pointer types, create an instance to check
+			if rv.IsNil() && rv.Type().Elem().Kind() != reflect.Interface {
+				newVal := reflect.New(rv.Type().Elem())
+				if !valueImplementsScanner {
+					_, valueImplementsScanner = newVal.Interface().(sql.Scanner)
+				}
+				if !valueImplementsStringer {
+					_, valueImplementsStringer = newVal.Interface().(fmt.Stringer)
+				}
+			}
+		}
+	}
+
+	if valueImplementsScanner && valueImplementsStringer {
+		valueType = "TEXT"
+		kv.valueNeedsMarshal = true // Still needs marshal, but will use String() method
+	}
+
+	switch any(v).(type) {
+	case string:
+		valueType = "TEXT"
+		kv.valueNeedsMarshal = false
+	case []byte:
+		valueType = "BYTEA"
+		kv.valueNeedsMarshal = false
+	case bool:
+		valueType = "BOOLEAN"
+		kv.valueNeedsMarshal = false
+	case time.Time, *time.Time:
+		valueType = "BIGINT"
+		kv.valueNeedsMarshal = false
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		valueType = "BIGINT"
+		kv.valueNeedsMarshal = false
+	case float32, float64:
+		valueType = "DOUBLE PRECISION"
+		kv.valueNeedsMarshal = false
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
-	_, err = kv.db.Exec(ctx, query)
-	if err != nil {
-		return nil, err
+
+	// Check if table exists and has correct schema
+	var existingKeyType, existingValueType string
+	checkQuery := `
+		SELECT
+			pg_catalog.format_type(a1.atttypid, a1.atttypmod) as key_type,
+			pg_catalog.format_type(a2.atttypid, a2.atttypmod) as value_type
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		JOIN pg_attribute a1 ON a1.attrelid = c.oid AND a1.attname = 'key'
+		JOIN pg_attribute a2 ON a2.attrelid = c.oid AND a2.attname = 'value'
+		WHERE c.relname = $1 AND n.nspname = 'public'
+	`
+	err = kv.db.QueryRow(ctx, checkQuery, cfg.tableName).Scan(&existingKeyType, &existingValueType)
+
+	needsRecreate := false
+	if err == nil {
+		// Table exists, check if types match
+		// Normalize type names for comparison
+		normalizeType := func(t string) string {
+			t = strings.ToLower(t)
+			if strings.Contains(t, "bytea") {
+				return "bytea"
+			}
+			if strings.Contains(t, "boolean") || t == "bool" {
+				return "boolean"
+			}
+			if strings.Contains(t, "bigint") || t == "integer" {
+				return "bigint"
+			}
+			if strings.Contains(t, "double") || strings.Contains(t, "precision") {
+				return "double precision"
+			}
+			if strings.Contains(t, "json") {
+				return "json"
+			}
+			if strings.Contains(t, "text") || strings.Contains(t, "character varying") {
+				return "text"
+			}
+			return t
+		}
+
+		expectedKeyType := normalizeType(keyType)
+		expectedValueType := normalizeType(valueType)
+		actualKeyType := normalizeType(existingKeyType)
+		actualValueType := normalizeType(existingValueType)
+
+		if expectedKeyType != actualKeyType || expectedValueType != actualValueType {
+			needsRecreate = true
+			// Drop the existing table
+			_, err = kv.db.Exec(ctx, `DROP TABLE IF EXISTS `+cfg.tableName)
+			if err != nil {
+				return nil, err
+			}
+		}
+	} else if err != pgx.ErrNoRows {
+		// Table doesn't exist, that's fine
+		// Any other error should be handled
+		needsRecreate = true
+	}
+
+	// Create table if it doesn't exist or was just dropped
+	if needsRecreate || err == pgx.ErrNoRows {
+		query := `
+			CREATE TABLE IF NOT EXISTS ` + cfg.tableName + ` (
+				key ` + keyType + ` PRIMARY KEY,
+				value ` + valueType + ` NOT NULL
+			)
+		`
+		_, err = kv.db.Exec(ctx, query)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return kv, nil
@@ -123,13 +270,27 @@ func New[K comparable, V any](tableName string, opts ...Option) *KV[K, V] {
 
 // TrySet stores a key-value pair, returning an error if it fails
 func (kv *KV[K, V]) TrySet(key K, value V) (V, error) {
-	keyStr, err := marshal(key)
-	if err != nil {
-		return value, err
+	var keyParam, valueParam any
+	var err error
+
+	if kv.keyNeedsMarshal {
+		keyParam, err = marshal(key)
+		if err != nil {
+			return value, err
+		}
+	} else {
+		// For native types, convert to proper PostgreSQL types
+		keyParam = convertToNativeType(key)
 	}
-	valueStr, err := marshal(value)
-	if err != nil {
-		return value, err
+
+	if kv.valueNeedsMarshal {
+		valueParam, err = marshal(value)
+		if err != nil {
+			return value, err
+		}
+	} else {
+		// For native types, convert to proper PostgreSQL types
+		valueParam = convertToNativeType(value)
 	}
 
 	query := `
@@ -144,35 +305,109 @@ func (kv *KV[K, V]) TrySet(key K, value V) (V, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
-	var oldValueStr sql.NullString
-	err = kv.db.QueryRow(ctx, query, keyStr, valueStr).Scan(&oldValueStr)
-	if err != nil {
-		return value, err
-	}
-
 	var oldValue V
-	if oldValueStr.Valid {
-		unmarshal(oldValueStr.String, &oldValue)
-	}
+	var oldValueScanned bool
 
-	// Handle nil pointers before using cmp.Equal (which requires symmetric Equal methods)
-	oldValueReflect := reflect.ValueOf(oldValue)
-	valueReflect := reflect.ValueOf(value)
-	oldIsNil := oldValueReflect.Kind() == reflect.Ptr && oldValueReflect.IsNil()
-	valueIsNil := valueReflect.Kind() == reflect.Ptr && valueReflect.IsNil()
-
-	// Only use cmp.Equal if both are non-nil
-	changed := false
-	if oldIsNil || valueIsNil {
-		// If nil states differ, it's a change
-		changed = oldIsNil != valueIsNil
+	if kv.valueNeedsMarshal {
+		var oldValueStr sql.NullString
+		err = kv.db.QueryRow(ctx, query, keyParam, valueParam).Scan(&oldValueStr)
+		if err != nil {
+			return value, err
+		}
+		if oldValueStr.Valid {
+			oldValueTarget, getOldValue := newScanTarget[V]()
+			unmarshal(oldValueStr.String, oldValueTarget)
+			oldValue = getOldValue()
+			oldValueScanned = true
+		}
 	} else {
-		// Both non-nil, safe to use cmp.Equal
-		changed = !cmp.Equal(value, oldValue)
+		// For native types, use nullable scan target
+		switch any(value).(type) {
+		case string:
+			var oldValueStr sql.NullString
+			err = kv.db.QueryRow(ctx, query, keyParam, valueParam).Scan(&oldValueStr)
+			if err != nil {
+				return value, err
+			}
+			if oldValueStr.Valid {
+				oldValue = any(oldValueStr.String).(V)
+				oldValueScanned = true
+			}
+		case []byte:
+			var oldValueBytes []byte
+			err = kv.db.QueryRow(ctx, query, keyParam, valueParam).Scan(&oldValueBytes)
+			if err != nil && err != pgx.ErrNoRows {
+				return value, err
+			}
+			if err == nil && oldValueBytes != nil {
+				oldValue = any(oldValueBytes).(V)
+				oldValueScanned = true
+			}
+		case bool:
+			var oldValueNullableBool sql.Null[bool]
+			err = kv.db.QueryRow(ctx, query, keyParam, valueParam).Scan(&oldValueNullableBool)
+			if err != nil {
+				return value, err
+			}
+			if oldValueNullableBool.Valid {
+				oldValue = any(oldValueNullableBool.V).(V)
+				oldValueScanned = true
+			}
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+			var oldValueNullable sql.Null[int64]
+			err = kv.db.QueryRow(ctx, query, keyParam, valueParam).Scan(&oldValueNullable)
+			if err != nil {
+				return value, err
+			}
+			if oldValueNullable.Valid {
+				oldValueTarget, getOldValue := newScanTarget[V]()
+				setInt(oldValueTarget, oldValueNullable.V)
+				oldValue = getOldValue()
+				oldValueScanned = true
+			}
+		case float32, float64:
+			var oldValueNullableFloat sql.Null[float64]
+			err = kv.db.QueryRow(ctx, query, keyParam, valueParam).Scan(&oldValueNullableFloat)
+			if err != nil {
+				return value, err
+			}
+			if oldValueNullableFloat.Valid {
+				oldValue = any(oldValueNullableFloat.V).(V)
+				oldValueScanned = true
+			}
+		case time.Time, *time.Time:
+			var oldValueNullable sql.Null[int64]
+			err = kv.db.QueryRow(ctx, query, keyParam, valueParam).Scan(&oldValueNullable)
+			if err != nil {
+				return value, err
+			}
+			if oldValueNullable.Valid && oldValueNullable.V != 0 {
+				oldValue = any(time.Unix(0, oldValueNullable.V)).(V)
+				oldValueScanned = true
+			}
+		}
 	}
 
-	if changed {
-		slog.Default().Log(context.Background(), slog.LevelDebug, fmt.Sprintf("pgkv: %v: changed", kv.tableName), "key", key, "old", fmt.Sprintf("%v", oldValue), "new", fmt.Sprintf("%v", value))
+	if oldValueScanned {
+		// Handle nil pointers before using cmp.Equal (which requires symmetric Equal methods)
+		oldValueReflect := reflect.ValueOf(oldValue)
+		valueReflect := reflect.ValueOf(value)
+		oldIsNil := oldValueReflect.Kind() == reflect.Ptr && oldValueReflect.IsNil()
+		valueIsNil := valueReflect.Kind() == reflect.Ptr && valueReflect.IsNil()
+
+		// Only use cmp.Equal if both are non-nil
+		changed := false
+		if oldIsNil || valueIsNil {
+			// If nil states differ, it's a change
+			changed = oldIsNil != valueIsNil
+		} else {
+			// Both non-nil, safe to use cmp.Equal
+			changed = !cmp.Equal(value, oldValue)
+		}
+
+		if changed {
+			slog.Default().Log(context.Background(), slog.LevelDebug, fmt.Sprintf("pgkv: %v: changed", kv.tableName), "key", key, "old", fmt.Sprintf("%v", oldValue), "new", fmt.Sprintf("%v", value))
+		}
 	}
 
 	return value, nil
@@ -190,22 +425,40 @@ func (kv *KV[K, V]) Set(key K, value V) V {
 // TryGet retrieves a value by key, returning an error if not found
 func (kv *KV[K, V]) TryGet(key K) (V, error) {
 	var v V
-	keyStr, err := marshal(key)
-	if err != nil {
-		return v, err
+	var keyParam any
+	var err error
+
+	if kv.keyNeedsMarshal {
+		keyParam, err = marshal(key)
+		if err != nil {
+			return v, err
+		}
+	} else {
+		// For native types, convert to proper PostgreSQL types
+		keyParam = convertToNativeType(key)
 	}
 
-	var valueStr string
 	query := `SELECT value FROM ` + kv.tableName + ` WHERE key = $1`
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
-	err = kv.db.QueryRow(ctx, query, keyStr).Scan(&valueStr)
-	if err != nil {
-		return v, err
-	}
 
-	err = unmarshal(valueStr, &v)
-	return v, err
+	if kv.valueNeedsMarshal {
+		var valueStr string
+		err = kv.db.QueryRow(ctx, query, keyParam).Scan(&valueStr)
+		if err != nil {
+			return v, err
+		}
+		err = unmarshal(valueStr, &v)
+		return v, err
+	} else {
+		// For native types, scan directly
+		valueTarget, getValue := newScanTarget[V]()
+		err = kv.db.QueryRow(ctx, query, keyParam).Scan(valueTarget)
+		if err != nil {
+			return v, err
+		}
+		return getValue(), nil
+	}
 }
 
 // Get retrieves a value by key, panics on error
@@ -231,16 +484,24 @@ func (kv *KV[K, V]) GetOr(key K, defaultValue V) V {
 
 // TryHas checks if a key exists, returning an error if the check fails
 func (kv *KV[K, V]) TryHas(key K) (bool, error) {
-	keyStr, err := marshal(key)
-	if err != nil {
-		return false, err
+	var keyParam any
+	var err error
+
+	if kv.keyNeedsMarshal {
+		keyParam, err = marshal(key)
+		if err != nil {
+			return false, err
+		}
+	} else {
+		// For native types, convert to proper PostgreSQL types
+		keyParam = convertToNativeType(key)
 	}
 
 	var exists int
 	query := `SELECT 1 FROM ` + kv.tableName + ` WHERE key = $1 LIMIT 1`
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
-	err = kv.db.QueryRow(ctx, query, keyStr).Scan(&exists)
+	err = kv.db.QueryRow(ctx, query, keyParam).Scan(&exists)
 	if err == pgx.ErrNoRows {
 		return false, nil
 	}
@@ -261,15 +522,23 @@ func (kv *KV[K, V]) Has(key K) bool {
 
 // TryDelete removes a key-value pair, returning an error if deletion fails
 func (kv *KV[K, V]) TryDelete(key K) error {
-	keyStr, err := marshal(key)
-	if err != nil {
-		return err
+	var keyParam any
+	var err error
+
+	if kv.keyNeedsMarshal {
+		keyParam, err = marshal(key)
+		if err != nil {
+			return err
+		}
+	} else {
+		// For native types, convert to proper PostgreSQL types
+		keyParam = convertToNativeType(key)
 	}
 
 	query := `DELETE FROM ` + kv.tableName + ` WHERE key = $1`
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
-	_, err = kv.db.Exec(ctx, query, keyStr)
+	_, err = kv.db.Exec(ctx, query, keyParam)
 	return err
 }
 
@@ -323,13 +592,27 @@ func (kv *KV[K, V]) SetNX(key K, value V) bool {
 
 // TrySetNX sets a value only if the key doesn't exist, returns true if the value was set
 func (kv *KV[K, V]) TrySetNX(key K, value V) (bool, error) {
-	keyStr, err := marshal(key)
-	if err != nil {
-		return false, err
+	var keyParam, valueParam any
+	var err error
+
+	if kv.keyNeedsMarshal {
+		keyParam, err = marshal(key)
+		if err != nil {
+			return false, err
+		}
+	} else {
+		// For native types, convert to proper PostgreSQL types
+		keyParam = convertToNativeType(key)
 	}
-	valueStr, err := marshal(value)
-	if err != nil {
-		return false, err
+
+	if kv.valueNeedsMarshal {
+		valueParam, err = marshal(value)
+		if err != nil {
+			return false, err
+		}
+	} else {
+		// For native types, convert to proper PostgreSQL types
+		valueParam = convertToNativeType(value)
 	}
 
 	query := `
@@ -341,19 +624,28 @@ func (kv *KV[K, V]) TrySetNX(key K, value V) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
-	var resultStr string
-	err = kv.db.QueryRow(ctx, query, keyStr, valueStr).Scan(&resultStr)
-
-	// If no rows returned, key already existed
-	if err == pgx.ErrNoRows {
-		return false, nil
+	if kv.valueNeedsMarshal {
+		var resultStr string
+		err = kv.db.QueryRow(ctx, query, keyParam, valueParam).Scan(&resultStr)
+		if err == pgx.ErrNoRows {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return true, nil
+	} else {
+		// For native types, scan directly
+		resultTarget, _ := newScanTarget[V]()
+		err = kv.db.QueryRow(ctx, query, keyParam, valueParam).Scan(resultTarget)
+		if err == pgx.ErrNoRows {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return true, nil
 	}
-	if err != nil {
-		return false, err
-	}
-
-	// Successfully inserted
-	return true, nil
 }
 
 // SetNZ sets a value only if it's not zero, returns the value
@@ -404,10 +696,17 @@ func (kv *KV[K, V]) TryAddRat(key K, delta any) (*rat.Rational, error) {
 // Update atomically updates the value at key using the provided function and returns the new value
 func (kv *KV[K, V]) Update(key K, fn func(V) V) (V, error) {
 	var result V
+	var keyParam any
+	var err error
 
-	keyStr, err := marshal(key)
-	if err != nil {
-		return result, err
+	if kv.keyNeedsMarshal {
+		keyParam, err = marshal(key)
+		if err != nil {
+			return result, err
+		}
+	} else {
+		// For native types, convert to proper PostgreSQL types
+		keyParam = convertToNativeType(key)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
@@ -420,20 +719,34 @@ func (kv *KV[K, V]) Update(key K, fn func(V) V) (V, error) {
 	defer tx.Rollback(ctx)
 
 	// Lock the row for update
-	var valueStr string
 	query := `SELECT value FROM ` + kv.tableName + ` WHERE key = $1 FOR UPDATE`
-	err = tx.QueryRow(ctx, query, keyStr).Scan(&valueStr)
 
 	var current V
-	if err == pgx.ErrNoRows {
-		// Key doesn't exist, use zero value
-		current = result
-	} else if err != nil {
-		return result, err
-	} else {
-		err = unmarshal(valueStr, &current)
-		if err != nil {
+	if kv.valueNeedsMarshal {
+		var valueStr string
+		err = tx.QueryRow(ctx, query, keyParam).Scan(&valueStr)
+		if err == pgx.ErrNoRows {
+			// Key doesn't exist, use zero value
+			current = result
+		} else if err != nil {
 			return result, err
+		} else {
+			err = unmarshal(valueStr, &current)
+			if err != nil {
+				return result, err
+			}
+		}
+	} else {
+		// For native types, scan directly
+		valueTarget, getValue := newScanTarget[V]()
+		err = tx.QueryRow(ctx, query, keyParam).Scan(valueTarget)
+		if err == pgx.ErrNoRows {
+			// Key doesn't exist, use zero value
+			current = result
+		} else if err != nil {
+			return result, err
+		} else {
+			current = getValue()
 		}
 	}
 
@@ -441,9 +754,15 @@ func (kv *KV[K, V]) Update(key K, fn func(V) V) (V, error) {
 	result = fn(current)
 
 	// Update
-	resultStr, err := marshal(result)
-	if err != nil {
-		return result, err
+	var resultParam any
+	if kv.valueNeedsMarshal {
+		resultParam, err = marshal(result)
+		if err != nil {
+			return result, err
+		}
+	} else {
+		// For native types, convert to proper PostgreSQL types
+		resultParam = convertToNativeType(result)
 	}
 
 	updateQuery := `
@@ -451,13 +770,43 @@ func (kv *KV[K, V]) Update(key K, fn func(V) V) (V, error) {
 		VALUES ($1, $2)
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
 	`
-	_, err = tx.Exec(ctx, updateQuery, keyStr, resultStr)
+	_, err = tx.Exec(ctx, updateQuery, keyParam, resultParam)
 	if err != nil {
 		return result, err
 	}
 
 	err = tx.Commit(ctx)
 	return result, err
+}
+
+// convertToNativeType converts Go types to their PostgreSQL native representations
+func convertToNativeType(v any) any {
+	switch val := v.(type) {
+	case string:
+		return val
+	case []byte:
+		return val
+	case bool:
+		return val
+	case time.Time:
+		if val.IsZero() {
+			return int64(0)
+		}
+		return val.UnixNano()
+	case *time.Time:
+		if val == nil || val.IsZero() {
+			return int64(0)
+		}
+		return val.UnixNano()
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return toInt64(val)
+	case float32:
+		return float64(val)
+	case float64:
+		return val
+	default:
+		return v
+	}
 }
 
 func marshal(v any) (string, error) {
@@ -481,10 +830,30 @@ func marshal(v any) (string, error) {
 	case float64:
 		return strconv.FormatFloat(val, 'f', -1, 64), nil
 	default:
-		// Check if the type implements fmt.Stringer for text representation
-		if stringer, ok := v.(fmt.Stringer); ok {
+		// Check if the type implements both sql.Scanner (for unmarshaling) and fmt.Stringer (for marshaling)
+		// This allows types like *rat.Rational and *CustomScanner to use their String() method
+		_, implementsScanner := v.(sql.Scanner)
+		stringer, implementsStringer := v.(fmt.Stringer)
+
+		// If pointer type and doesn't implement directly, check if dereferenced type implements
+		if !implementsScanner || !implementsStringer {
+			rv := reflect.ValueOf(v)
+			if rv.Kind() == reflect.Ptr && !rv.IsNil() {
+				deref := rv.Elem().Interface()
+				if !implementsScanner {
+					_, implementsScanner = deref.(sql.Scanner)
+				}
+				if !implementsStringer {
+					stringer, implementsStringer = deref.(fmt.Stringer)
+				}
+			}
+		}
+
+		if implementsScanner && implementsStringer {
 			return stringer.String(), nil
 		}
+
+		// For all other types, use JSON marshaling
 		b, err := json.Marshal(v)
 		return string(b), err
 	}
@@ -623,10 +992,37 @@ func newScanTarget[T any]() (target any, getValue func() T) {
 	var zero T
 	rt := reflect.TypeOf(zero)
 
+	// Handle string - scan directly as string
+	if _, ok := any(zero).(string); ok {
+		var s string
+		return &s, func() T {
+			return any(s).(T)
+		}
+	}
+
+	// Handle []byte - scan directly as []byte
+	if _, ok := any(zero).([]byte); ok {
+		var b []byte
+		return &b, func() T {
+			return any(b).(T)
+		}
+	}
+
+	// Handle bool - scan directly as bool
+	if _, ok := any(zero).(bool); ok {
+		var b bool
+		return &b, func() T {
+			return any(b).(T)
+		}
+	}
+
 	// Handle time.Time - scan as int64 (UnixNano)
 	if _, ok := any(zero).(time.Time); ok {
 		var nanos int64
 		return &nanos, func() T {
+			if nanos == 0 {
+				return any(time.Time{}).(T)
+			}
 			t := time.Unix(0, nanos)
 			return any(t).(T)
 		}
@@ -773,33 +1169,57 @@ func (kv *KV[K, V]) All(yield func(K, V) bool) {
 
 	pairs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (kvPair, error) {
 		var key K
-		var valueStr string
+		var value V
 
-		if kv.keyNeedsMarshal {
-			var keyStr string
+		keyTarget, getKey := newScanTarget[K]()
+		valTarget, getVal := newScanTarget[V]()
+
+		if kv.keyNeedsMarshal && kv.valueNeedsMarshal {
+			// Both need unmarshaling
+			var keyStr, valueStr string
 			if err := row.Scan(&keyStr, &valueStr); err != nil {
 				return kvPair{}, err
 			}
-			keyTarget, getKey := newScanTarget[K]()
+			if err := unmarshal(keyStr, keyTarget); err != nil {
+				return kvPair{}, err
+			}
+			if err := unmarshal(valueStr, valTarget); err != nil {
+				return kvPair{}, err
+			}
+			key = getKey()
+			value = getVal()
+		} else if kv.keyNeedsMarshal && !kv.valueNeedsMarshal {
+			// Key needs unmarshaling, value is native
+			var keyStr string
+			if err := row.Scan(&keyStr, valTarget); err != nil {
+				return kvPair{}, err
+			}
 			if err := unmarshal(keyStr, keyTarget); err != nil {
 				return kvPair{}, err
 			}
 			key = getKey()
-		} else {
-			// Native type key (time.Time or integer) scanned directly from PostgreSQL
-			keyTarget, getKey := newScanTarget[K]()
+			value = getVal()
+		} else if !kv.keyNeedsMarshal && kv.valueNeedsMarshal {
+			// Key is native, value needs unmarshaling
+			var valueStr string
 			if err := row.Scan(keyTarget, &valueStr); err != nil {
 				return kvPair{}, err
 			}
+			if err := unmarshal(valueStr, valTarget); err != nil {
+				return kvPair{}, err
+			}
 			key = getKey()
+			value = getVal()
+		} else {
+			// Both are native
+			if err := row.Scan(keyTarget, valTarget); err != nil {
+				return kvPair{}, err
+			}
+			key = getKey()
+			value = getVal()
 		}
 
-		valTarget, getVal := newScanTarget[V]()
-		if err := unmarshal(valueStr, valTarget); err != nil {
-			return kvPair{}, err
-		}
-
-		return kvPair{key: key, value: getVal()}, nil
+		return kvPair{key: key, value: value}, nil
 	})
 	if err != nil {
 		panic(err)
@@ -874,33 +1294,57 @@ func (kv *KV[K, V]) AllWhere(whereClause string) func(yield func(K, V) bool) {
 
 		pairs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (kvPair, error) {
 			var key K
-			var valueStr string
+			var value V
 
-			if kv.keyNeedsMarshal {
-				var keyStr string
+			keyTarget, getKey := newScanTarget[K]()
+			valTarget, getVal := newScanTarget[V]()
+
+			if kv.keyNeedsMarshal && kv.valueNeedsMarshal {
+				// Both need unmarshaling
+				var keyStr, valueStr string
 				if err := row.Scan(&keyStr, &valueStr); err != nil {
 					return kvPair{}, err
 				}
-				keyTarget, getKey := newScanTarget[K]()
+				if err := unmarshal(keyStr, keyTarget); err != nil {
+					return kvPair{}, err
+				}
+				if err := unmarshal(valueStr, valTarget); err != nil {
+					return kvPair{}, err
+				}
+				key = getKey()
+				value = getVal()
+			} else if kv.keyNeedsMarshal && !kv.valueNeedsMarshal {
+				// Key needs unmarshaling, value is native
+				var keyStr string
+				if err := row.Scan(&keyStr, valTarget); err != nil {
+					return kvPair{}, err
+				}
 				if err := unmarshal(keyStr, keyTarget); err != nil {
 					return kvPair{}, err
 				}
 				key = getKey()
-			} else {
-				// Native type key (time.Time or integer) scanned directly from PostgreSQL
-				keyTarget, getKey := newScanTarget[K]()
+				value = getVal()
+			} else if !kv.keyNeedsMarshal && kv.valueNeedsMarshal {
+				// Key is native, value needs unmarshaling
+				var valueStr string
 				if err := row.Scan(keyTarget, &valueStr); err != nil {
 					return kvPair{}, err
 				}
+				if err := unmarshal(valueStr, valTarget); err != nil {
+					return kvPair{}, err
+				}
 				key = getKey()
+				value = getVal()
+			} else {
+				// Both are native
+				if err := row.Scan(keyTarget, valTarget); err != nil {
+					return kvPair{}, err
+				}
+				key = getKey()
+				value = getVal()
 			}
 
-			valTarget, getVal := newScanTarget[V]()
-			if err := unmarshal(valueStr, valTarget); err != nil {
-				return kvPair{}, err
-			}
-
-			return kvPair{key: key, value: getVal()}, nil
+			return kvPair{key: key, value: value}, nil
 		})
 		if err != nil {
 			panic(err)

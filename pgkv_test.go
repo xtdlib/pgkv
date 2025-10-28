@@ -3,6 +3,7 @@ package pgkv
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"testing"
 	"time"
 
@@ -1152,4 +1153,41 @@ func TestSetNZRat(t *testing.T) {
 	}
 
 	kv.Purge()
+}
+
+func TestTimeKeyIteration(t *testing.T) {
+	kv := New[string, time.Time]("TestTimeKeyIteration")
+	kv.Clear()
+
+	now := time.Now()
+	kv.Set("hello", now)
+	for k, v := range kv.All {
+		if !v.Equal(now) {
+			t.Fatalf("Expected time %v, got %v", now, v)
+		}
+
+		if k != "hello" {
+			t.Fatalf("Expected key 'hello', got '%s'", k)
+		}
+		log.Println("key:", k, "value:", v)
+	}
+}
+
+func TestRat2(t *testing.T) {
+	kv := New[*rat.Rational, *rat.Rational]("TestRat2")
+
+	key := rat.Rat(0)
+	kv.Clear()
+	kv.AddRat(key, "1/3")
+	kv.AddRat(key, "1/3")
+	kv.AddRat(key, "1/3")
+	if !kv.Get(key).Equal("1") {
+		t.Fatal("error")
+	}
+	kv.AddRat(key, "1/3")
+	if !kv.Get(key).Equal("4/3") {
+		t.Log(kv.Get(key))
+		t.Fatal("error")
+	}
+	t.Log("value:", kv.Get(key))
 }
