@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"reflect"
 	"strconv"
@@ -406,7 +405,7 @@ func (kv *KV[K, V]) TrySet(key K, value V) (V, error) {
 		}
 
 		if changed {
-			slog.Default().Log(context.Background(), slog.LevelDebug, fmt.Sprintf("pgkv: %v: changed", kv.tableName), "key", key, "old", fmt.Sprintf("%v", oldValue), "new", fmt.Sprintf("%v", value))
+			// slog.Default().Log(context.Background(), slog.LevelDebug, fmt.Sprintf("pgkv: %v: changed", kv.tableName), "key", key, "old", fmt.Sprintf("%v", oldValue), "new", fmt.Sprintf("%v", value))
 		}
 	}
 
@@ -684,7 +683,7 @@ func (kv *KV[K, V]) TryAddRat(key K, delta any) (*rat.Rational, error) {
 	out, err := kv.Update(key, func(v V) V {
 		old := rat.Rat(v)
 		ratOut = old.Add(delta)
-		slog.Default().Log(context.Background(), slog.LevelDebug, "pgkv: add", "key", key, "old", old, "new", ratOut, "delta", delta)
+		// slog.Default().Log(context.Background(), slog.LevelDebug, "pgkv: add", "key", key, "old", old, "new", ratOut, "delta", delta)
 		return any(ratOut).(V)
 	})
 	if err != nil {
